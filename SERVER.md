@@ -120,6 +120,16 @@ installation that uses it.
    `PAPERPULL_HOSTS` in `compose.yaml`, more than one separated by commas.
    With `compose.https.yaml` it is the address and names in `x-address`
    and `x-names`, since Caddy has a certificate for those alone.
+
+   To have it answer to nothing you did not list, set `PAPERPULL_HOSTS_ONLY`
+   to `1` beside `PAPERPULL_HOSTS`. It then answers only to the names and
+   addresses in `PAPERPULL_HOSTS`, and no longer to its address or a home
+   network name unless you list them too, so list the address or name you
+   open it by. The container still reaches itself by its own loopback,
+   which the self-test uses. With `compose.https.yaml`, put the address in
+   `x-names` as well. A name it refuses gets a page saying the setting is
+   on and how to add the name, and when nothing is listed the container's
+   log says so at start and the self-test's network row fails.
 5. **Add your providers** from the panel. Each one gets a folder in the data
    folder. Coming from the desktop app, bring them instead, see
    [Coming from the desktop app](#coming-from-the-desktop-app).

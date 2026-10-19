@@ -32,6 +32,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -266,19 +267,58 @@ def screen_checks() -> None:
         check("screen", False, "%s: %s" % (type(e).__name__, e))
 
 
+# What PAPERPULL_HOSTS_ONLY takes for yes, as gui/server_mode.py reads it
+# (server/tests/test_selftest_hosts_only.py holds the two together).
+HOSTS_ONLY_ON = ("1", "true", "yes", "on")
+
+
+def answer_of(url: str) -> tuple:
+    """The first answer to a request and the start of its body, a redirect
+    not followed."""
+    try:
+        with urllib.request.build_opener(_NoRedirect).open(url, timeout=10) as r:
+            return r.status, r.read(2000).decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        return e.code, e.read(2000).decode("utf-8", "replace")
+
+
 def network_checks() -> None:
     """The panel answers on the container's own network address, the one
-    Docker publishes, and the screen sharing server does not."""
+    Docker publishes, and the screen sharing server does not. With
+    PAPERPULL_HOSTS_ONLY on, the panel answers that address with its
+    refusal unless the address is listed, which still shows it listens
+    there. A page there with the address not listed means the panel never
+    took the setting, and nothing listed means no other device can open it,
+    so both fail."""
     try:
         address = socket.gethostbyname(socket.gethostname())
-        panel = status_of("http://%s:8765/favicon.ico" % address)
+        panel, body = answer_of("http://%s:8765/favicon.ico" % address)
         try:
             socket.create_connection((address, 5900), timeout=3).close()
             vnc = "answers"
         except OSError:
             vnc = "does not answer"
-        check("network", panel == 200 and vnc == "does not answer",
-              "on %s the panel answers %d and screen sharing %s" % (address, panel, vnc))
+        hosts_only = (os.environ.get("PAPERPULL_HOSTS_ONLY") or "").strip().lower() in HOSTS_ONLY_ON
+        if not hosts_only:
+            check("network", panel == 200 and vnc == "does not answer",
+                  "on %s the panel answers %d and screen sharing %s" % (address, panel, vnc))
+            return
+        listed = [item for item in re.split(r"[\s,]+", os.environ.get("PAPERPULL_HOSTS") or "")
+                  if item]
+        if not listed:
+            check("network", False, "PAPERPULL_HOSTS_ONLY is on and PAPERPULL_HOSTS lists "
+                  "nothing, so no other device can open the panel")
+            return
+        address_listed = any(address in re.split(r"[/\[\]:]+", item) for item in listed)
+        if panel == 400:
+            answers = "PAPERPULL_HOSTS_ONLY is on" in body and not address_listed
+            how = "%d, refusing an address PAPERPULL_HOSTS_ONLY leaves out" % panel
+        else:
+            answers = panel == 200 and address_listed
+            how = "%d%s" % (panel, "" if address_listed else ", though PAPERPULL_HOSTS_ONLY is on "
+                            "and the address is not listed")
+        check("network", answers and vnc == "does not answer",
+              "on %s the panel answers %s and screen sharing %s" % (address, how, vnc))
     except Exception as e:
         check("network", False, "%s: %s" % (type(e).__name__, e))
 

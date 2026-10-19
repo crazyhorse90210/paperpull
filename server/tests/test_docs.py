@@ -162,6 +162,21 @@ def test_the_names_the_setup_says_the_panel_answers_to_are_the_panels():
     assert '# PAPERPULL_HOSTS: "' in compose
 
 
+def test_the_hosts_only_setting_the_pages_name_is_the_one_the_panel_reads():
+    """A setting the guide names and the panel never reads, or a value it
+    tells a person to write that the panel takes for no, leaves a server
+    answering names its owner believes it refuses."""
+    code = (REPO / "gui" / "server_mode.py").read_text(encoding="utf-8")
+    assert 'os.environ.get("PAPERPULL_HOSTS_ONLY")' in code
+    assert "1" in panel_setting("HOSTS_ONLY_ON")
+    server_page = " ".join((REPO / "SERVER.md").read_text(encoding="utf-8").split())
+    assert "set `PAPERPULL_HOSTS_ONLY` to `1`" in server_page
+    security_page = " ".join((REPO / "SECURITY-SERVER.md").read_text(encoding="utf-8").split())
+    assert "`PAPERPULL_HOSTS_ONLY` set to `1`" in security_page
+    for compose in ("compose.yaml", "compose.https.yaml"):
+        assert '# PAPERPULL_HOSTS_ONLY: "1"' in (SERVER / compose).read_text(encoding="utf-8"), compose
+
+
 @pytest.mark.parametrize("page, server_page", [
     ("PRIVACY.md", "PRIVACY-SERVER.md"),
     ("SECURITY.md", "SECURITY-SERVER.md"),

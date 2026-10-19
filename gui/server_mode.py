@@ -299,8 +299,16 @@ def setup_code() -> str:
 
 def on_start() -> None:
     """At the panel's start, take PAPERPULL_PASSWORD when no password is
-    kept yet, or print the setup code."""
-    if not enabled() or password_set():
+    kept yet, or print the setup code. Say so in the log, too, when
+    PAPERPULL_HOSTS_ONLY is on with nothing listed, since the panel then
+    answers to no other device."""
+    if not enabled():
+        return
+    if hosts_only() and not listed_names():
+        print("PAPERPULL_HOSTS_ONLY is on and PAPERPULL_HOSTS lists nothing, so the panel\n"
+              "answers to no other device. List the address or name you open it by in\n"
+              "PAPERPULL_HOSTS, then recreate the container.", flush=True)
+    if password_set():
         return
     given = os.environ.get("PAPERPULL_PASSWORD") or ""
     if given:
@@ -523,8 +531,46 @@ def same_origin(headers: dict) -> bool:
 # anywhere else, and so is a name that exists only on a home network, nas
 # or nas.local. Any other name, a VPN's or a reverse proxy's, is one the
 # person lists in PAPERPULL_HOSTS.
+#
+# PAPERPULL_HOSTS_ONLY, when the person sets it, narrows that to the names
+# and addresses in PAPERPULL_HOSTS alone, for a server that should answer to
+# nothing it was not told of. The container's own loopback still answers,
+# since no other device can reach the server by it, and the self-test and
+# the container's own checks use it.
 
 LOCAL_SUFFIXES = (".local", ".lan", ".home", ".home.arpa", ".internal", ".localdomain")
+HOSTS_ONLY_ON = ("1", "true", "yes", "on")
+
+
+def hosts_only() -> bool:
+    """Whether PAPERPULL_HOSTS_ONLY asks for the listed names alone. Read on
+    every request, as PAPERPULL_HOSTS is."""
+    return (os.environ.get("PAPERPULL_HOSTS_ONLY") or "").strip().lower() in HOSTS_ONLY_ON
+
+
+def _loopback(name: str) -> bool:
+    if name == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(name).is_loopback
+    except ValueError:
+        return False
+
+
+def _a_listed_address(name: str, listed: set) -> bool:
+    """Whether a name is an address that PAPERPULL_HOSTS lists, however
+    either is written, so fd00::5 and fd00:0:0:0:0:0:0:5 are one."""
+    try:
+        address = ipaddress.ip_address(name)
+    except ValueError:
+        return False
+    for item in listed:
+        try:
+            if ipaddress.ip_address(item) == address:
+                return True
+        except ValueError:
+            continue
+    return False
 
 
 def listed_names() -> set:
@@ -547,6 +593,9 @@ def host_allowed(name: str) -> bool:
     """Whether the server answers to a name, given without its port."""
     if not name:
         return False
+    if hosts_only():
+        listed = listed_names()
+        return _loopback(name) or name in listed or _a_listed_address(name, listed)
     try:
         ipaddress.ip_address(name)
         return True
@@ -560,6 +609,12 @@ def not_its_name(name: str) -> str:
     the server by a name of their own reads how to add it."""
     if not name:
         return "This PaperPull Server answers only to its own address and names.\n"
+    if hosts_only():
+        return ("This PaperPull Server was asked for as %s, and PAPERPULL_HOSTS_ONLY is on, so "
+                "it answers only to the names and addresses in PAPERPULL_HOSTS. If that is how "
+                "you reach it, add %s to PAPERPULL_HOSTS in compose.yaml, or to x-names in "
+                "compose.https.yaml, then recreate the container, since a restart keeps the "
+                "settings it started with.\n" % (name, name))
     return ("This PaperPull Server was asked for as %s, which is not one of its names, so it "
             "did not answer. If that is how you reach it, add %s to PAPERPULL_HOSTS in "
             "compose.yaml, then recreate the container, since a restart keeps the settings "

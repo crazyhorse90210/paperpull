@@ -61,6 +61,7 @@ def own_folders(tmp_path, monkeypatch):
     monkeypatch.delenv("PAPERPULL_PASSWORD", raising=False)
     monkeypatch.delenv("PAPERPULL_SERVER", raising=False)
     monkeypatch.delenv("PAPERPULL_HOSTS", raising=False)
+    monkeypatch.delenv("PAPERPULL_HOSTS_ONLY", raising=False)
     server_mode._SESSIONS.clear()
     server_mode._FAILS.clear()
     server_mode._SETUP["code"] = None
@@ -444,6 +445,77 @@ def test_a_name_listed_in_paperpull_hosts_is_answered(base, on_server, monkeypat
     assert ask(base + "/api/apps", session=session, headers=by_proxy)[0] == 400
     monkeypatch.setenv("PAPERPULL_HOSTS", "paperpull.example.com")
     assert ask(base + "/api/apps", session=session, headers=by_proxy)[0] == 200
+
+
+def test_hosts_only_answers_the_listed_names_and_this_machine_alone(monkeypatch):
+    """PAPERPULL_HOSTS_ONLY, asked for, takes away every name the server
+    answers to by default, an address, a name without a dot and a home
+    network suffix, and leaves only what PAPERPULL_HOSTS lists, an address
+    matched however either is written, and the machine's own loopback."""
+    monkeypatch.setenv("PAPERPULL_HOSTS_ONLY", "1")
+    monkeypatch.setenv("PAPERPULL_HOSTS", "nas.local, 192.168.50.20, [fd00::5], paperpull.example.com")
+    for name in ("nas.local", "192.168.50.20", "fd00::5", "fd00:0:0:0:0:0:0:5",
+                 "paperpull.example.com", "127.0.0.1", "127.0.0.2", "::1", "localhost"):
+        assert server_mode.host_allowed(name), name
+    for name in ("192.168.50.21", "10.0.0.5", "172.17.0.2", "fd00::6", "nas", "nas.lan",
+                 "other.local", "sub.nas.local", "nas.home.arpa", "rebind.example",
+                 "nas.local.example.com", "localhost.example", "localhost.", "0.0.0.0", "::",
+                 "::ffff:192.168.50.21", ""):
+        assert not server_mode.host_allowed(name), name
+
+
+def test_hosts_only_with_nothing_listed_answers_this_machine_alone(monkeypatch):
+    monkeypatch.setenv("PAPERPULL_HOSTS_ONLY", "yes")
+    for name in ("127.0.0.1", "::1", "localhost"):
+        assert server_mode.host_allowed(name), name
+    for name in ("192.168.50.20", "nas", "nas.local"):
+        assert not server_mode.host_allowed(name), name
+
+
+@pytest.mark.parametrize("value", ["", "0", "no", "off", "false", "2"])
+def test_hosts_only_is_off_unless_asked_for(monkeypatch, value):
+    """Only a plain yes turns it on, so a stray value leaves the server
+    answering the names it always has."""
+    monkeypatch.setenv("PAPERPULL_HOSTS_ONLY", value)
+    assert not server_mode.hosts_only()
+    for name in ("192.168.50.20", "nas", "nas.local"):
+        assert server_mode.host_allowed(name), name
+
+
+@pytest.mark.parametrize("value", ["1", "true", "YES", " on "])
+def test_hosts_only_is_on_for_each_plain_yes(monkeypatch, value):
+    monkeypatch.setenv("PAPERPULL_HOSTS_ONLY", value)
+    assert server_mode.hosts_only()
+    assert not server_mode.host_allowed("nas.local")
+
+
+def test_hosts_only_refuses_an_unlisted_name_and_says_why(base, on_server, monkeypatch):
+    """Through the running panel, a request by a home network name is
+    refused once the mode is on, before any password is tried, and told the
+    mode is on and how to add the name. A listed name and this machine's
+    own address still reach it."""
+    session = signed_in(base)
+    port = base.rsplit(":", 1)[1]
+    by_name = {"Host": "nas.local:" + port}
+    assert ask(base + "/api/apps", session=session, headers=by_name)[0] == 200
+    monkeypatch.setenv("PAPERPULL_HOSTS_ONLY", "1")
+    status, _, said = ask(base + "/api/apps", session=session, headers=by_name)
+    assert status == 400 and "PAPERPULL_HOSTS_ONLY is on" in said and "nas.local" in said
+    assert "x-names in compose.https.yaml" in said, "the HTTPS setup's place is named too"
+    status, _, _ = ask(base + "/login", "POST", {"password": PASSWORD}, headers=by_name)
+    assert status == 400 and not server_mode._FAILS, "no password was even tried"
+    assert ask(base + "/api/apps", session=session)[0] == 200, "127.0.0.1 still answers"
+    monkeypatch.setenv("PAPERPULL_HOSTS", "nas.local")
+    assert ask(base + "/api/apps", session=session, headers=by_name)[0] == 200
+
+
+def test_hosts_only_with_nothing_listed_is_said_at_start(on_server, monkeypatch, capsys):
+    monkeypatch.setenv("PAPERPULL_HOSTS_ONLY", "1")
+    server_mode.on_start()
+    assert "PAPERPULL_HOSTS_ONLY is on and PAPERPULL_HOSTS lists nothing" in capsys.readouterr().out
+    monkeypatch.setenv("PAPERPULL_HOSTS", "nas.local")
+    server_mode.on_start()
+    assert "lists nothing" not in capsys.readouterr().out
 
 
 def test_off_the_server_the_panel_answers_only_at_its_own_address(base):
