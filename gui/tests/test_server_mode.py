@@ -1225,7 +1225,8 @@ def test_what_the_desktop_shows_in_a_folder_the_server_downloads(
     (shop / "shop_receipts.py").write_text("", encoding="utf-8")
     (shop / "Diagnostics" / "failure-run-1.json").write_text('{"step": "a step"}',
                                                              encoding="utf-8")
-    sheet = tmp_path / "PaperPull purchases.xlsx"
+    # Beside the installs, where both exports write it.
+    sheet = tmp_path / "apps" / "All Purchases.xlsx"
     sheet.write_bytes(b"a spreadsheet")
     monkeypatch.setattr(app_module, "_LAST_EXPORT", sheet)
 

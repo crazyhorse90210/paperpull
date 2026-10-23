@@ -7,6 +7,24 @@ All notable changes to PaperPull are recorded here. Versioning follows
 - **MINOR**, a new app, or a cross-app feature
 - **MAJOR**, breaking changes (repo layout, config format, removing an app)
 
+## [Unreleased]
+
+### Security
+- **PaperPull Server's spreadsheet Download no longer follows a link left
+  in the spreadsheet's place.** An export writes its spreadsheet beside the
+  providers' folders in the data folder, and Download then handed over the
+  file of that name, opened again by name when it was sent. The data folder
+  is often a share others can write, so anyone who could write there could
+  swap the spreadsheet for a link after the export, or for a second name of
+  another file, and the person who pressed Download got whatever it led to
+  that the server can read, its settings in /config or a signed-in
+  browser's cookies among them. Download now opens the file as it is at that moment,
+  only a file of its own inside the folder the export was given, and sends
+  it from that same open, as the support report and set-aside downloads
+  already did. Anything else is refused with a note to export again. A
+  spreadsheet nobody touched downloads as before, under the same name. Show
+  in folder on the desktop reads nothing from the file and is unchanged.
+
 ## [0.57.0] - 2026-10-22
 
 One documents folder for every provider. Set a base folder in Settings and
