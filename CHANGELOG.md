@@ -7,6 +7,24 @@ All notable changes to PaperPull are recorded here. Versioning follows
 - **MINOR**, a new app, or a cross-app feature
 - **MAJOR**, breaking changes (repo layout, config format, removing an app)
 
+## [Unreleased]
+
+### Fixed
+- **A run whose documents go to a documents folder says what it saved.**
+  Once a download run ends, the control panel moves what it saved into
+  the account's documents folder with the app's own Rename, and every
+  app's Rename wrote a run summary of its own, which left
+  new-this-run.txt listing nothing. The panel read that list after the
+  move, so a Citi run that saved 23 requested statements said Nothing
+  new, and the home page logged it as a run with nothing new (#103). It
+  happened for any account with a documents folder since 0.54.0, and
+  since 0.57.0 every account has one once a base folder is chosen. The
+  panel now reads the run's list as the run ends, before anything else
+  runs for the account, and counts from the run's own result as well. A
+  Rename leaves run-summary.txt and new-this-run.txt as the last download
+  run wrote them, as Discover already did, so the list names each file
+  where the run saved it, before the move.
+
 ## [0.57.0] - 2026-10-22
 
 One documents folder for every provider. Set a base folder in Settings and

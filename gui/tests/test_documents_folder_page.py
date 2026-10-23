@@ -316,6 +316,36 @@ def test_after_a_download_run_what_it_saved_moves_to_the_documents_folder(
     assert move_env[renaming.MOVE_DOCUMENTS_ENV] == "new"
 
 
+def test_what_a_run_saved_is_what_the_page_lists_after_its_move(started, downloading, tmp_path):
+    """The move is the app's own Rename, and every app's Rename wrote a run
+    summary of its own, new-this-run.txt with nothing in it. The panel read
+    the list after the move, so a Citi run that saved 23 requested
+    statements said Nothing new (#103). The list is read once, as the run
+    ends and before the move, and the page and the run log get that one,
+    whatever a step after the run writes."""
+    real = app_module.subprocess.Popen
+
+    def lists(cmd, **kwargs):
+        if "--pilot" in cmd:
+            downloading([str(tmp_path / "Statements" / "a.pdf"),
+                         str(tmp_path / "Statements" / "b.pdf")])
+        if "--rename" in cmd:
+            downloading([])
+        return real(cmd, **kwargs)
+
+    app_module.subprocess.Popen = lists
+    try:
+        out = ran("pilot")
+    finally:
+        app_module.subprocess.Popen = real
+    assert "event: done\ndata: 0" in out, out
+    (pilot, _), (move, _) = started
+    assert "--pilot" in pilot and move == ["py", "shop_docs.py", "--rename", "--apply"]
+    [said] = [part for part in out.split("\n\n") if part.startswith("event: saved\n")]
+    assert json.loads(said.split("data: ", 1)[1]) == ["a.pdf", "b.pdf"]
+    assert app_module._read_run_log(tmp_path)[0]["saved"] == ["a.pdf", "b.pdf"]
+
+
 @pytest.mark.parametrize("why", ["no documents folder", "nothing saved", "an old list"])
 def test_no_move_follows_a_run_with_nothing_of_its_own_to_move(started, downloading, tmp_path,
                                                                why):

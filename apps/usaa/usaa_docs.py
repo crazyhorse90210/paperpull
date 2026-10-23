@@ -1066,10 +1066,13 @@ def main(argv=None):
         # summary rewrites new-this-run.txt, and for a mode that
         # downloads nothing that means replacing the real list from
         # the last download run with an empty one.
-        if app.stats["mode"] == "discover":
-            # Discover downloads nothing, so the run summary and
-            # new-this-run.txt stay as the last download run wrote
-            # them, and only the panel is told how it ended.
+        if app.stats["mode"] in ("discover", "rename"):
+            # Discover and Rename download nothing, so the run summary
+            # and new-this-run.txt stay as the last download run wrote
+            # them, and only the panel is told how it ended. The panel
+            # moves what a run saved into a documents folder with a
+            # Rename, and its empty list made that run read as one that
+            # saved nothing (#103).
             report_run_result(app.stats)
         elif app.stats["mode"] not in ("", "diagnose", "record"):
             app.write_run_summary()

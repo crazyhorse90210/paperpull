@@ -555,7 +555,8 @@ documents folder, into Statements, Tax Documents, Receipts and the other
 folders of each kind, with any folders your naming pattern adds. The
 provider's records, Manual Review, Logs, Diagnostics and Backups never
 move, so the documents folder only ever gets documents that passed their
-checks.
+checks. The run's `new-this-run.txt` stays in the provider's own folder and
+lists what the run saved, each file where the run saved it, before the move.
 
 Saving the setting moves nothing that is already there. Documents saved
 before stay where they are, and PaperPull still finds them, so nothing is

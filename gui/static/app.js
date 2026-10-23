@@ -498,7 +498,7 @@ function runLine(e) {
   else if (e.exit_code === 130) said = 'interrupted';
   else if (e.exit_code && e.exit_code !== 0) said = 'ended with a problem';
   else if (res.stopped) said = 'stopped partway';
-  else if ((e.saved || []).length) said = many(e.saved.length, 'new file');
+  else if (savedCount(res, e.saved)) said = many(savedCount(res, e.saved), 'new file');
   else said = ['pilot', 'all', 'resume'].includes(e.action) ? 'nothing new' : 'done';
   return '<li><span class="when">' + esc(when(e.ended || e.started)) + '</span><span>' + esc(ACTION_WORDS[e.action] || e.action) +
     (e.redownload ? ' (restore)' : '') + ', ' + esc(said) + '</span></li>';
@@ -740,9 +740,18 @@ function finishRun(code, refused) {
   renderAll();
   lockStarts();
 }
+// How many files a run saved. Its own result counts them, and the names
+// read from its new-this-run.txt can be fewer (one name for two files of
+// that name, 500 at most) or none when the list could not be read, so a run
+// that saved documents never reads as having saved nothing (#103).
+function savedCount(res, saved) {
+  const counted = res && Number.isInteger(res.new_files) && res.new_files > 0 ? res.new_files : 0;
+  return Math.max(counted, Array.isArray(saved) ? saved.length : 0);
+}
 // What a run came to, in a title, a sentence and a tone.
 function runOutcome() {
   const res = RUN.result, code = RUN.code, n = noun(RUN), saved = RUN.saved || [];
+  const fresh = savedCount(res, saved);
   const who = RUN.provider;
   // Documents of one type on one date are listed on every run and never
   // saved, since a row cannot be bound to either. They are said here, but
@@ -792,12 +801,12 @@ function runOutcome() {
     if (asideToo) says.push('A document set aside sits in the Manual Review folder, where PaperPull kept it ' +
       'rather than file it under the wrong name.');
     if (!says.length) says.push('The technical details below say what happened.');
-    return {tone: 'warn', title: saved.length ? many(saved.length, 'new ' + n) + ' saved, some need a look' : 'Finished, needs attention',
+    return {tone: 'warn', title: fresh ? many(fresh, 'new ' + n) + ' saved, some need a look' : 'Finished, needs attention',
       say: 'Finished, needs attention (' + details.join(', ') + '). ' + says.join(' ') + alike, clean: true, attention: true,
       names: named > 0, aside: asideToo};
   }
   if (res && ['pilot', 'all', 'resume'].includes(RUN.action)) {
-    return saved.length ? {tone: 'ok', title: many(saved.length, 'new ' + n) + ' saved',
+    return fresh ? {tone: 'ok', title: many(fresh, 'new ' + n) + ' saved',
       say: alike ? 'Finished.' + alike : 'Finished, no issues reported.', clean: true}
       : {tone: 'ok', title: 'Nothing new', say: 'Everything ' + (alike ? 'else ' : '') + who +
         ' lists in these dates is already saved.' + alike, clean: true};
