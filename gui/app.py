@@ -27,6 +27,7 @@ import base64
 import csv
 import hashlib
 import json
+import mimetypes
 import os
 from datetime import date, datetime
 import re
@@ -48,7 +49,7 @@ import run_result
 
 from anyio import to_thread
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
+from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from starlette.datastructures import MutableHeaders
 
 # PaperPull targets Python 3.11+ (README, and core/pyproject.toml's
@@ -1141,13 +1142,57 @@ def api_export_reveal():
 def api_export_download():
     """On PaperPull Server, the last spreadsheet this panel wrote, handed to
     the browser, where the desktop shows it in a folder. Like reveal, it
-    takes no path from the page, only the one the panel itself wrote."""
+    takes no path from the page, only the one the panel itself wrote.
+
+    That name is in the data folder, often a share others can write, and
+    one of them could have put a link there since the export ended, to the
+    server's settings in /config or a signed-in profile. So it is opened
+    again now, as a file of its own inside the folder the export was given,
+    and sent from that same open (_open_plain), where a file response
+    opened it again by name and followed a link."""
     if not server_mode.enabled():
         raise HTTPException(404)
     p = _LAST_EXPORT
-    if not p or not p.is_file():
+    if not p or not os.path.lexists(p):
         raise HTTPException(404, "nothing exported yet")
-    return FileResponse(p, filename=p.name)
+    fd = _exported(p)
+    if fd is None:
+        raise HTTPException(404, "That spreadsheet is no longer the one this panel wrote. "
+                                 "Export it again.")
+    fh = os.fdopen(fd, "rb")
+    size = os.fstat(fd).st_size
+
+    def chunks():
+        # No more than it held when it was opened, the length the browser
+        # is told, though a share writer could still be adding to it.
+        left = size
+        try:
+            while left > 0:
+                part = fh.read(min(1024 * 1024, left))
+                if not part:
+                    return
+                left -= len(part)
+                yield part
+        finally:
+            fh.close()
+    kind = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
+    return StreamingResponse(chunks(), media_type=kind,
+                             headers={**_attachment(p.name), "Content-Length": str(size)})
+
+
+def _exported(p: Path):
+    """An open handle on the spreadsheet at p, or None. Only a file of its
+    own inside the folder both exports write into, the apps root, and on
+    the server only when that folder is inside the data folder."""
+    root = os.path.realpath(apps_root())
+    if server_mode.enabled():
+        data = os.path.realpath(server_mode.data_root())
+        try:
+            if os.path.commonpath([_same(root), _same(data)]) != _same(data):
+                return None
+        except ValueError:
+            return None
+    return _open_plain(p, root)
 
 
 def _jsonable(value):

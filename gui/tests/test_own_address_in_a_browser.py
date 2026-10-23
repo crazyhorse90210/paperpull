@@ -208,7 +208,8 @@ def test_on_the_server_the_page_still_hands_over_its_spreadsheet_and_failure_fil
     refusal instead and download nothing."""
     monkeypatch.setenv("PAPERPULL_SERVER", "1")
     server_mode.set_password(PASSWORD)
-    sheet = tmp_path / "All Purchases.xlsx"
+    # Beside the installs, where both exports write it.
+    sheet = shop.parent / "All Purchases.xlsx"
     sheet.write_bytes(b"an invented spreadsheet")
     monkeypatch.setattr(app_module, "_LAST_EXPORT", sheet)
     (shop / "Diagnostics").mkdir()

@@ -408,3 +408,162 @@ def test_more_than_the_most_is_said_and_sends_nothing(shop, monkeypatch):
     written(shop / "Manual Review", "two.pdf", PDF)
     status, detail = asked(app_module.api_aside_download, app="Shop Receipts")
     assert status == 413 and "Copy it from the Manual Review folder" in detail
+
+
+# -- the spreadsheet an export wrote ------------------------------------------------
+#
+# /api/export/download hands over the file the last export wrote, beside the
+# installs in the data folder. That folder is often a share others can write,
+# so the name is checked again when it is downloaded, not only when the export
+# ended. The server's settings in /config stand in for what a link could reach.
+
+HISTORY = ("Purchase Date,Order or Receipt Number,Item Name,Quantity,Unit Price,"
+           "Line Item Total,Order Total\n"
+           "2026-05-14,1001,Invented Item,1,$5.00,$5.00,$5.00\n")
+SETTINGS = b'{"password": "an invented secret"}'
+
+
+class AskedToExport:
+    """The page asking for every purchase, with nothing else in its body."""
+    async def json(self):
+        return {}
+
+
+def sent(got) -> bytes:
+    """What the browser would get, from a refusal, a response, or the file
+    a file response names, read the way it reads it."""
+    if isinstance(got, str):
+        return got.encode()
+    if hasattr(got, "path"):
+        return Path(got.path).read_bytes()
+    return body_of(got)
+
+
+def exported(shop, monkeypatch) -> Path:
+    """The spreadsheet a real export of purchases writes, from one invented
+    order history, which is the file the panel then hands over."""
+    monkeypatch.setattr(app_module, "_LAST_EXPORT", None)
+    (shop / "Shop Order History.csv").write_text(HISTORY, encoding="utf-8")
+    result = asyncio.run(app_module.api_export(AskedToExport()))
+    assert result["ok"], result
+    sheet = Path(result["path"])
+    assert sheet.parent == shop.parent and app_module._LAST_EXPORT == sheet
+    return sheet
+
+
+def test_the_spreadsheet_an_export_wrote_is_handed_over_as_before(shop, monkeypatch):
+    """What the page gets for a spreadsheet nobody touched, the name, type,
+    size and bytes the file response it used to send gave."""
+    from fastapi.responses import FileResponse
+    sheet = exported(shop, monkeypatch)
+    status, got = asked(app_module.api_export_download)
+    assert status == 200, got
+    before = FileResponse(sheet, filename=sheet.name)
+    assert got.media_type == before.media_type
+    assert got.headers["content-disposition"] == before.headers["content-disposition"]
+    assert named(got) == "All Purchases.xlsx"
+    assert got.headers["content-length"] == str(sheet.stat().st_size)
+    assert body_of(got) == sheet.read_bytes()
+
+
+def test_a_spreadsheet_swapped_for_a_link_after_the_export_is_not_handed_over(
+        shop, tmp_path, monkeypatch):
+    """A share writer swaps the spreadsheet for a link to the server's own
+    settings between the export and the download. The file response the
+    download used followed it."""
+    if not can_link(tmp_path):
+        pytest.skip("this system makes no symbolic links for an ordinary user")
+    secret = written(tmp_path / "config", "server.json", SETTINGS)
+    sheet = exported(shop, monkeypatch)
+    sheet.unlink()
+    sheet.symlink_to(secret)
+    status, got = asked(app_module.api_export_download)
+    assert SETTINGS not in sent(got)
+    assert status == 404
+
+
+def test_a_spreadsheet_swapped_for_a_hard_link_after_the_export_is_not_handed_over(
+        shop, tmp_path, monkeypatch):
+    """A hard link reads as a plain file, and could be a second name of the
+    server's settings on the same disk."""
+    secret = written(tmp_path / "config", "server.json", SETTINGS)
+    sheet = exported(shop, monkeypatch)
+    sheet.unlink()
+    try:
+        os.link(secret, sheet)
+    except OSError:
+        pytest.skip("this system makes no hard link here")
+    status, got = asked(app_module.api_export_download)
+    assert SETTINGS not in sent(got)
+    assert status == 404
+
+
+def test_a_spreadsheet_outside_the_folder_the_export_was_given_is_not_handed_over(
+        shop, tmp_path, monkeypatch):
+    """Both exports write only into the folder the panel names, so a file
+    anywhere else is none of theirs."""
+    secret = written(tmp_path / "config", "server.json", SETTINGS)
+    monkeypatch.setattr(app_module, "_LAST_EXPORT", secret)
+    status, got = asked(app_module.api_export_download)
+    assert SETTINGS not in sent(got)
+    assert status == 404
+
+
+def test_a_spreadsheet_in_an_apps_root_outside_the_data_folder_is_not_handed_over(
+        shop, tmp_path, monkeypatch):
+    """On the server the folder it sits in has to be inside the data folder
+    too, as for every other file the panel hands over."""
+    sheet = exported(shop, monkeypatch)
+    away = tmp_path / "config"
+    away.mkdir()
+    moved = away / sheet.name
+    sheet.replace(moved)
+    monkeypatch.setattr(app_module, "apps_root", lambda: away)
+    monkeypatch.setattr(app_module, "_LAST_EXPORT", moved)
+    assert asked(app_module.api_export_download)[0] == 404
+
+
+def test_a_spreadsheet_that_grows_while_it_is_sent_is_sent_at_the_length_it_was_told(
+        shop, monkeypatch):
+    """A share writer adding to it after it was opened. The browser was told
+    its length then, and a response longer than that is cut off unfinished."""
+    sheet = exported(shop, monkeypatch)
+    real = sheet.read_bytes()
+    status, got = asked(app_module.api_export_download)
+    assert status == 200, got
+    with open(sheet, "ab") as more:
+        more.write(b"added since")
+    assert body_of(got) == real
+    assert got.headers["content-length"] == str(len(real))
+
+
+def test_a_spreadsheet_that_is_gone_says_nothing_was_exported(shop, monkeypatch):
+    exported(shop, monkeypatch).unlink()
+    assert asked(app_module.api_export_download) == (404, "nothing exported yet")
+
+
+def test_a_spreadsheet_swapped_after_its_check_is_still_read_from_the_checked_open(
+        shop, tmp_path, monkeypatch):
+    """The window a check by name leaves, between the check and the read.
+    The spreadsheet is swapped for a link the moment its check is done."""
+    # Windows will not delete a file that is open, so there this swap
+    # cannot happen (see the set-aside test above).
+    if os.name == "nt":
+        pytest.skip("Windows will not delete a file that is open")
+    if not can_link(tmp_path):
+        pytest.skip("this system makes no symbolic links for an ordinary user")
+    secret = written(tmp_path / "config", "server.json", SETTINGS)
+    sheet = exported(shop, monkeypatch)
+    real = sheet.read_bytes()
+    checked = app_module._open_plain
+
+    def then_swap(path, inside):
+        fd = checked(path, inside)
+        Path(path).unlink()
+        Path(path).symlink_to(secret)
+        return fd
+    monkeypatch.setattr(app_module, "_open_plain", then_swap)
+    status, got = asked(app_module.api_export_download)
+    assert status == 200, got
+    assert body_of(got) == real
+    assert sheet.is_symlink()
