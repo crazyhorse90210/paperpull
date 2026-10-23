@@ -433,10 +433,14 @@ def _bill_controls(page):
         page.locator(_SHOWN_MARKED).filter(visible=True))
 
 
+# Whether an element is one the site marks as a statement's PDF.
+_MARKED_JS = "(e, s) => e.matches(s)"
+
+
 def _marked(el) -> bool:
     """Whether the site marks this control as a statement's PDF."""
     try:
-        return bool(el.evaluate("(e, s) => e.matches(s)", STATEMENT_PDF_SELECTOR))
+        return bool(el.evaluate(_MARKED_JS, STATEMENT_PDF_SELECTOR))
     except Exception:
         return False
 
@@ -635,6 +639,17 @@ class RawDoc:
     text: str = ""
     row_index: int = -1
     kind: str = "doc"
+    # How many rows of the bill's list hold a document of this date and
+    # kind. Rows past the first cannot be told apart from it, so the
+    # download refuses the document rather than guess which one it is.
+    rows: int = 1
+
+
+class _Found(list):
+    """The documents discovery found, with counts of the document controls
+    that would not answer and of those whose two readings disagree."""
+    unread = 0
+    unsure = 0
 
 
 # The row a bill control sits in, the nearest enclosing element whose
@@ -849,75 +864,345 @@ def _statement_date(name: str, row_text: str, row_flat: str = "") -> Optional[st
     return next(iter(written)) if len(written) == 1 else None
 
 
-def _statement_controls(page, new_only: bool = False):
-    """Each control on the page that fetches one statement or tax form, as
-    (position, element, its words, its date, its row's words). Discovery
-    and the download find a control the same way, through this.
+# What a document is, read from the control that fetches it, the way the
+# Wells Fargo app reads one. Discovery names a document by its bill, its
+# date and its kind, and the download finds its control again by the same
+# reading, so the two cannot disagree about which document a control
+# fetches. A statement and a 1099 of one day are two documents.
+#
+# Each control is read twice. Once the way this app always read it, its
+# date by _statement_date from the row _ROW_OF_JS takes, and its kind from
+# a tax form's number or name anywhere in its words or its row's. And once
+# with care, from the same row with every other document control's words
+# and dates left out, and its kind from its own words and then the nearest
+# words around it that are not another control's (see _kind_of). A control
+# is a document only where both readings agree on its date and its kind.
+# Where they disagree, the page is one this app does not understand, and
+# the control is counted and left alone, so nothing is filed under a kind
+# or a date the old reading would not have given it either.
+#
+# The kinds are the two this app has ever listed, a tax form, in the words
+# of _A_TAX_FORM_RE, and a statement, a bill or a billing statement. Any
+# other kind of document an insurer sends, an ID card, a declarations page,
+# a notice or a payment's receipt, is no document control here at all
+# (_row_names_a_statement, _marked_row_refuses).
+_A_STATEMENT_KIND_RE = re.compile(r"\b(bills?|statements?)\b", re.I)
+# What comes just before the last digits of a masked policy or account
+# number, ****1099, a run of bullets or x's, or "ending in". Those digits are
+# that number's, never a form's, and the bill of a policy ending 1099 was
+# filed as a tax form (review of this port).
+_MASKED_RE = re.compile(r"(?:[*#%s]+|x{2,})[\s.-]?$|\b(?:ending|ends)(?:\s+in)?\s*$|"
+                        r"\blast\s+(?:four|4)(?:\s+digits)?\s*$" % chr(0x2022), re.I)
 
-    With `new_only`, only a control that shows and was not showing before
-    a bill's Bill details was pressed (_mark_shown), so a list already on
-    the page is never read as that bill's.
 
-    Each control is held as the element itself, so the element the guard
-    read is the one pressed, even when the page draws another row above it
-    in between (review of the Bill details change)."""
+def _names_a_tax_form(words: str) -> bool:
+    """Whether `words` name a tax form, read with care (_A_TAX_FORM_RE),
+    never by the last digits of a masked number."""
+    for m in _A_TAX_FORM_RE.finditer(words):
+        if m.group(1) and _MASKED_RE.search(words[max(0, m.start() - 16):m.start()]):
+            continue
+        return True
+    return False
+
+# The words a document's title starts with, by its kind. Discovery writes
+# the title from these, and the download reads the kind back out of it.
+KIND_TITLES = {"tax": "Tax Document", "statement": "Account Statement"}
+
+# How long a control has to answer a read, in milliseconds.
+_READ_MS = 2000
+
+
+def kind_of_title(title: str) -> Optional[str]:
+    """The kind of document a title written by collect_download_docs names,
+    or None for a title it did not write."""
+    for kind, words in KIND_TITLES.items():
+        if (title or "").startswith(words + " - "):
+            return kind
+    return None
+
+
+def _kind_of(own: str, chain) -> str:
+    """Which kind of document a control fetches, read with care. What its
+    own words name, a tax form or a statement. Otherwise the nearest words
+    around it that name a kind, so an entry printing "Billing statement" is
+    a statement under a heading that says tax documents. `chain` is what
+    each element around the control prints of its own, nearest first, with
+    every other document control's part left out, so a 1099's control
+    beside a statement's says nothing of the statement. With no such words
+    it is a statement, as it always was, and as the site's statementPDF
+    mark says."""
+    if _names_a_tax_form(own):
+        return "tax"
+    if _A_STATEMENT_KIND_RE.search(own):
+        return "statement"
+    for words in chain:
+        if _names_a_tax_form(words):
+            return "tax"
+        if _A_STATEMENT_KIND_RE.search(words):
+            return "statement"
+    return "statement"
+
+
+# Where a control sits, read in the page with care.
+#
+# Its row is the element the old reading takes (_ROW_OF_JS), the nearest
+# around the control that prints a date, up to six levels up, and none
+# where that reading refuses one, a list of rows, two statementPDF links of
+# one row, or more than a row's length. "text" and "flat" are that row's
+# pieces of text and its innerText the way _ROW_OF_JS reads them, with
+# every other document control left out. A part holding none is read whole,
+# as innerText reads it, so a row holding no other control reads exactly
+# as it did.
+#
+# "row" numbers the entry the control belongs to, the same number for every
+# control of one entry and a different one for any other, so two entries
+# printing the same words are still two. An entry is the control's table or
+# grid row. Without one it is the outermost part, inside the row, that
+# prints words of its own outside any part holding a document control, so a
+# menu of View and Download is never an entry but each of two bills under
+# one date is. Without that it is the row, and without a row the control's
+# list item, or else the part of the page that holds the control and no
+# other document control, up to six levels up, or the control alone. "up"
+# numbers what holds the entry, so a part of an entry is known to be inside
+# it.
+#
+# "own" is the control's visible text. "chain" is what each element around
+# it prints of its own, nearest first, up to the row, or the part that holds
+# the control alone, leaving out any part that holds another document
+# control and every date. They say what kind of document the control
+# fetches, so a form's name printed beside a link that names only its date
+# says what the link fetches (review of this port). The numbers are kept in
+# a map on the page's window and nothing is written into the page.
+_WHERE_JS = r"""(el, arg) => {
+  const dateRe = /(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4}|\d{4}-\d{2}-\d{2}/i;
+  const everyDate = new RegExp(dateRe.source, 'gi');
+  const bill = new RegExp(arg.pattern, 'i');
+  const key = Symbol.for('paperpull.rows');
+  const store = window[key] || (window[key] = {ids: new WeakMap(), next: 1});
+  const idOf = (n) => {
+    if (!store.ids.has(n)) store.ids.set(n, store.next++);
+    return store.ids.get(n);
+  };
+  const ROWS = 'tr, [role=row], li';
+  const CONTROLS = 'a, button, [role=button], [role=link]';
+  const marked = (c) => c.matches(arg.marked);
+  const isDoc = (c) => marked(c)
+    || bill.test((c.getAttribute('aria-label') || c.innerText || '').replace(/\s+/g, ' ').trim());
+  const isOther = (c) => c !== el && !c.contains(el) && !el.contains(c) && c.matches(CONTROLS) && isDoc(c);
+  const holding = new Map();
+  const holdsDoc = (n) => {
+    if (!holding.has(n)) holding.set(n, (n.matches(CONTROLS) && isDoc(n))
+      || Array.from(n.querySelectorAll(CONTROLS)).some(isDoc));
+    return holding.get(n);
+  };
+  const holdsOther = (n) => isOther(n) || Array.from(n.querySelectorAll(CONTROLS)).some(isOther);
+  const shown = (n) => !!n && n.getClientRects().length > 0 && getComputedStyle(n).visibility === 'visible';
+  const rowOf = (c) => {
+    for (let node = c, depth = 0; node && depth < 6; node = node.parentElement, depth++)
+      if (dateRe.test(node.innerText || '')) return node;
+    return null;
+  };
+  // Each visible piece of text with a space between, as _ROW_OF_JS reads
+  // them, leaving out the pieces whose element `skip` names.
+  const piecesOf = (a, skip) => {
+    const parts = [];
+    const walker = document.createTreeWalker(a, NodeFilter.SHOW_TEXT);
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      const host = n.parentElement;
+      if (!host || !host.getClientRects().length || (skip && skip(host))) continue;
+      const t = (n.textContent || '').replace(/\s+/g, ' ').trim();
+      if (t) parts.push(t);
+    }
+    return parts.join(' ');
+  };
+  let dated = rowOf(el);
+  if (dated) for (const c of dated.querySelectorAll(CONTROLS)) {
+    if (!isOther(c)) continue;
+    const theirs = rowOf(c);
+    if ((theirs && theirs !== dated && dated.contains(theirs)) || (theirs === dated && marked(c) && marked(el))) {
+      dated = null;
+      break;
+    }
+  }
+  if (dated && (piecesOf(dated).length > 300 || (dated.innerText || '').trim().length > 300)) dated = null;
+  const inOther = (host) => {
+    for (let n = host; n && dated.contains(n); n = n.parentElement) if (isOther(n)) return true;
+    return false;
+  };
+  // An element's innerText leaving out every other document control. A part
+  // holding none is read whole, and the parts around one are read apart.
+  const flatOutside = (n) => {
+    if (n.nodeType === Node.TEXT_NODE) return shown(n.parentElement) ? (n.textContent || '') : '';
+    if (n.nodeType !== Node.ELEMENT_NODE || isOther(n) || !n.getClientRects().length) return '';
+    if (!holdsOther(n)) return n.innerText || '';
+    return Array.from(n.childNodes).map(flatOutside).filter(s => s.trim()).join('\n');
+  };
+  const text = dated ? piecesOf(dated, inOther) : '';
+  const flat = dated ? flatOutside(dated).trim() : '';
+  let bound = dated && dated !== el ? dated : (el.closest(ROWS) || el);
+  if (bound === el)
+    for (let n = el.parentElement, depth = 0; n && depth < 6 && !holdsOther(n); n = n.parentElement, depth++)
+      bound = n;
+  const wordsOf = (a) => {
+    const out = [];
+    const walker = document.createTreeWalker(a, NodeFilter.SHOW_TEXT);
+    for (let t = walker.nextNode(); t; t = walker.nextNode()) {
+      const host = t.parentElement;
+      if (!shown(host)) continue;
+      let held = false;
+      for (let n = host; n && n !== a; n = n.parentElement) if (holdsDoc(n)) { held = true; break; }
+      if (held) continue;
+      const s = (t.textContent || '').replace(everyDate, ' ').replace(/\s+/g, ' ').trim();
+      if (/[A-Za-z0-9]/.test(s)) out.push(s);
+    }
+    return out.join(' ');
+  };
+  const chain = [];
+  let worded = null;
+  for (let n = el.parentElement; n && bound.contains(n); n = n.parentElement) {
+    const w = wordsOf(n);
+    chain.push(w.slice(0, 300));
+    if (w) worded = n;
+  }
+  const table = el.closest('tr, [role=row]');
+  const row = table && bound.contains(table) ? table : (worded || bound);
+  const up = [];
+  for (let n = row.parentElement; n; n = n.parentElement) up.push(idOf(n));
+  return {text, flat, own: (el.innerText || '').trim().slice(0, 300), chain, row: idOf(row), up};
+}"""
+
+
+@dataclass
+class _Seen:
+    """One statement or tax form control, as a look at the page read it."""
+    index: int      # its place among the page's document controls
+    el: object      # the element itself, the one pressed
+    name: str       # its own words, the ones the guard passed
+    href: str
+    iso: str        # the date of the document it fetches
+    kind: str       # "tax" or "statement"
+    row: int        # the entry it belongs to, alike for every control of it
+    up: tuple = ()  # what holds that entry, nearest first
+    doubt: str = ""  # "date" or "kind" when its two readings disagree on it
+
+
+class _Survey(list):
+    """Every statement and tax form control a look at the page could read
+    and file, with counts of the controls that would not answer and of
+    those whose two readings disagree."""
+    unread = 0
+    unsure = 0
+
+
+def _read_control(el, index: int, new_only: bool = False) -> Optional[_Seen]:
+    """What one control fetches, or None when it is not a dated statement or
+    tax form control the guard lets through. Raises when the control would
+    not answer, or has left the page, because a control that could not be
+    read is not a control that is absent. `el` is the element itself.
+
+    With `new_only`, a control that does not show, or was showing before a
+    bill's Bill details was pressed (_mark_shown), is none of that bill's,
+    so a list already on the page is never read as the bill's. The answer's
+    `doubt` names what the two readings of it disagree on, and such a
+    control is filed as nothing."""
+    seen = _reading(el, index, new_only)
+    # Whatever the reads answered, a control that left the page while it
+    # was read was read off the page, where it shows nothing and has no row,
+    # so it counts as one that would not answer. A copy the page drew in its
+    # place was passed over when it was taken as absent (review of this
+    # port).
+    if not el.evaluate("e => e.isConnected"):
+        raise LookupError("the control left the page as it was read")
+    return seen
+
+
+def _reading(el, index: int, new_only: bool) -> Optional[_Seen]:
+    """_read_control's reads of the control, in that order."""
+    if new_only and (not el.is_visible() or not el.evaluate(_IS_NEW_JS)):
+        return None
+    marked = bool(el.evaluate(_MARKED_JS, STATEMENT_PDF_SELECTOR))
+    name = (el.get_attribute("aria-label") or el.inner_text() or "").strip()
+    if marked and not name:
+        name = (el.get_attribute("title") or "").strip()
+    name = re.sub(r"\s+", " ", name)
+    # A control the site marks as a statement's PDF is one by the site's
+    # own word, and has none of its own to match, so only the guard's
+    # check of every word below applies to it.
+    if not marked and (not is_safe_control(name) or not BILL_CONTROL_RE.search(name)):
+        return None
+    if any(_refused(w) for w in el.evaluate(_WORDS_OF_JS) or []):
+        return None
+    if marked and el.evaluate(_HOLDS_A_CONTROL_JS):
+        return None
+    arg = {"pattern": BILL_CONTROL_RE.pattern, "marked": STATEMENT_PDF_SELECTOR}
+    row = el.evaluate(_ROW_OF_JS, arg) or {}
+    row_text = str(row.get("text") or "") if isinstance(row, dict) else ""
+    row_flat = str(row.get("flat") or "") if isinstance(row, dict) else ""
+    if marked and _marked_row_refuses(row_text, row_flat):
+        return None
+    if (not marked and not _STATEMENT_WORDS_RE.search(name)
+            and not _row_names_a_statement(row_text, row_flat)):
+        return None
+    where = el.evaluate(_WHERE_JS, arg) or {}
+    iso_as_before = _statement_date(name, row_text, row_flat)
+    iso = _statement_date(name, str(where.get("text") or ""), str(where.get("flat") or ""))
+    if not iso and not iso_as_before:
+        return None
+    try:
+        href = el.get_attribute("href") or ""
+    except Exception:
+        href = ""      # shown in a survey, never what decides anything
+    kind = _kind_of(name + " " + str(where.get("own") or ""), [str(w) for w in where.get("chain") or ()])
+    # A tax form's number only as a number of its own, and tax only as a
+    # tax form. Anywhere in a row, a reference number or "Premium tax"
+    # made a statement a Tax Document (review of 0.41.0).
+    kind_as_before = "tax" if _A_TAX_FORM_RE.search(name + " " + row_text) else "statement"
+    doubt = "date" if iso != iso_as_before else ("kind" if kind != kind_as_before else "")
+    return _Seen(index, el, name, href, iso or iso_as_before, kind, int(where.get("row") or 0),
+                 tuple(where.get("up") or ()), doubt)
+
+
+def _rows_of(controls) -> set:
+    """The entries a document's controls sit in that hold no other of them.
+    A control in an entry and another in a part of it fetch one document,
+    and two entries apart from each other hold two."""
+    rows = {c.row for c in controls}
+    return {r for r in rows if not any(r in c.up for c in controls)}
+
+
+def _survey(page, new_only: bool = False) -> _Survey:
+    """Every statement and tax form control on the page, read one at a time,
+    each held as the element itself, so the element the guard read is the
+    one pressed, even when the page draws another row above it in between
+    (review of the Bill details change). Discovery names documents from
+    this and the download finds its control again from it, so the two read
+    a control the same way. `new_only` as for _read_control."""
+    out = _Survey()
     ctrls = _bill_controls(page)
-    for i in range(ctrls.count()):
+    try:
+        count = ctrls.count()
+    except Exception:
+        out.unread += 1
+        return out
+    for i in range(count):
         try:
-            el = ctrls.nth(i).element_handle(timeout=2000)
+            seen = _read_control(ctrls.nth(i).element_handle(timeout=_READ_MS), i, new_only)
         except Exception:
+            out.unread += 1
             continue
-        if new_only:
-            try:
-                if not el.is_visible() or not el.evaluate(_IS_NEW_JS):
-                    continue
-            except Exception:
-                continue
-        marked = _marked(el)
-        try:
-            name = (el.get_attribute("aria-label") or el.inner_text() or "").strip()
-            if marked and not name:
-                name = (el.get_attribute("title") or "").strip()
-        except Exception:
+        if seen is None:
             continue
-        name = re.sub(r"\s+", " ", name)
-        # A control the site marks as a statement's PDF is one by the site's
-        # own word, and has none of its own to match, so only the guard's
-        # check of every word below applies to it.
-        if not marked and (not is_safe_control(name) or not BILL_CONTROL_RE.search(name)):
+        if seen.doubt:
+            out.unsure += 1
             continue
-        try:
-            words = el.evaluate(_WORDS_OF_JS) or []
-        except Exception:
-            continue
-        if any(_refused(w) for w in words):
-            continue
-        if marked:
-            try:
-                if el.evaluate(_HOLDS_A_CONTROL_JS):
-                    continue
-            except Exception:
-                continue
-        try:
-            row = el.evaluate(_ROW_OF_JS, {"pattern": BILL_CONTROL_RE.pattern,
-                                           "marked": STATEMENT_PDF_SELECTOR}) or {}
-        except Exception:
-            row = {}
-        row_text = str(row.get("text") or "") if isinstance(row, dict) else ""
-        row_flat = str(row.get("flat") or "") if isinstance(row, dict) else ""
-        if marked and _marked_row_refuses(row_text, row_flat):
-            continue
-        if (not marked and not _STATEMENT_WORDS_RE.search(name)
-                and not _row_names_a_statement(row_text, row_flat)):
-            continue
-        iso = _statement_date(name, row_text, row_flat)
-        if iso:
-            yield i, el, name, iso, row_text
+        out.append(seen)
+    return out
 
 
 def collect_download_docs(page, refused: Optional[list] = None) -> List[RawDoc]:
-    """Read every statement and tax document the page offers. Each
-    control's own name, or the row it sits in, carries the date.
+    """Read every statement and tax document the page offers, one for each
+    bill, date and kind, so a statement and a 1099 of one day are both
+    found.
 
     Where Billing & Payments lists its bills, each bill's statements are
     behind its Bill details (#45). So each bill that passes the guard and
@@ -930,35 +1215,53 @@ def collect_download_docs(page, refused: Optional[list] = None) -> List[RawDoc]:
     nothing else, are both kept. Their PDFs decide at the download, where
     one that is byte for byte another bill's statement of the same date
     sends both copies to manual review (review of the Bill details change).
+    Two rows of one bill and day holding the same kind cannot be told
+    apart. That document is recorded once, with the number of its rows,
+    and the download refuses it rather than guess. A control that would not
+    answer is counted and left for the next run, and lends no other control
+    its date or its kind. So is a control whose two readings disagree on its
+    date or its kind, which is left for a person.
 
     `refused`, when given, is told in words of ours why a bill's
     statements were left alone, every bill skipped included, so the run can
     write it down."""
     bills = _bills(page)
+    docs = _Found()
     if not bills:
-        return _documents_shown(page, "", set())
-    if refused is not None:
-        if any(not b.safe for b in bills):
-            refused.append(REFUSED_BUTTON)
-        if any(b.safe and b.account is None for b in bills):
-            refused.append(NO_ACCOUNT)
-    seen: set = set()
-    docs: List[RawDoc] = []
-    for account in [b.account for b in bills if b.safe and b.account is not None]:
-        said: dict = {}
-        view, bill = _open_bill(page, account, said)
-        if view is not None:
-            docs.extend(_documents_shown(page, account, seen, view, bill, said))
-        if said.get("refused") and refused is not None:
-            refused.append(said["refused"])
+        _documents_shown(page, "", set(), docs)
+    else:
+        if refused is not None:
+            if any(not b.safe for b in bills):
+                refused.append(REFUSED_BUTTON)
+            if any(b.safe and b.account is None for b in bills):
+                refused.append(NO_ACCOUNT)
+        seen: set = set()
+        for account in [b.account for b in bills if b.safe and b.account is not None]:
+            said: dict = {}
+            view, bill = _open_bill(page, account, said)
+            if view is not None:
+                _documents_shown(page, account, seen, docs, view, bill, said)
+            if said.get("refused") and refused is not None:
+                refused.append(said["refused"])
+    if docs.unread:
+        log.info("%d document controls would not answer, what they hold waits for the next run",
+                 docs.unread)
+    if docs.unsure:
+        log.info("%d document controls read two ways disagree on their date or kind, and are left for a person",
+                 docs.unsure)
+    shared = sum(1 for d in docs if d.rows > 1)
+    if shared:
+        log.info("%d documents share their date and kind with another row, none of them is guessed at",
+                 shared)
     return docs
 
 
-def _documents_shown(page, account: str, seen: set, view: Optional[str] = None,
-                     bill=None, report: Optional[dict] = None) -> List[RawDoc]:
-    """The statements and tax documents the page shows now, each carrying
-    `account`, the bill's account part, and none whose account part and
-    date are in `seen` already.
+def _documents_shown(page, account: str, seen: set, docs: _Found, view: Optional[str] = None,
+                     bill=None, report: Optional[dict] = None) -> None:
+    """The statements and tax documents the page shows now, one for each
+    date and kind, each carrying `account`, the bill's account part, and
+    none whose account part, date and kind are in `seen` already, added to
+    `docs` with what would not be read.
 
     With `view`, the path `bill`'s Bill details led to, only what that
     press brought is read, and nothing once the tab has left it, after a
@@ -967,7 +1270,6 @@ def _documents_shown(page, account: str, seen: set, view: Optional[str] = None,
     statement list already showing beside the bills before the press is
     never read as the bill's, since which bill it belongs to cannot be
     told, a safe miss. `report` is told why, as for _press_details."""
-    docs: List[RawDoc] = []
     stayed = expand_all(page, view)
     if view is None:
         scroll_full_page(page)
@@ -975,40 +1277,97 @@ def _documents_shown(page, account: str, seen: set, view: Optional[str] = None,
         _scroll_bill_view(page)
         if not (stayed and _on_view(page, view)):
             _refuse(report, LEFT_THE_VIEW)
-            return docs
+            return
         refusal = _view_refusal(page, bill) if bill is not None else UNREAD
         if refusal:
             _refuse(report, refusal)
-            return docs
-    for i, el, name, iso, row_text in _statement_controls(page, new_only=view is not None):
-        try:
-            href = el.get_attribute("href") or ""
-        except Exception:
-            href = ""
-        if (account, iso) in seen:
+            return
+    survey = _survey(page, new_only=view is not None)
+    docs.unread += survey.unread
+    docs.unsure += survey.unsure
+    by_document: dict = {}
+    for c in survey:
+        by_document.setdefault((c.iso, c.kind), []).append(c)
+    for (iso, kind), controls in by_document.items():
+        if (account, iso, kind) in seen:
             continue
-        seen.add((account, iso))
+        seen.add((account, iso, kind))
+        first = controls[0]
         disp = _human_date(iso)
-        # A tax form's number only as a number of its own, and tax only as a
-        # tax form. Anywhere in a row, a reference number or "Premium tax"
-        # made a statement a Tax Document (review of 0.41.0).
-        tax = bool(_A_TAX_FORM_RE.search(name + " " + row_text))
-        kind_title = "Tax Document" if tax else "Account Statement"
+        kind_title = KIND_TITLES[kind]
         docs.append(RawDoc(title=f"{kind_title} - {disp}", account=account, date_text=iso,
-                           href=href if PDF_HREF_RE.search(href or "") else "",
-                           text=f"American Family {kind_title} {disp}", row_index=i,
-                           kind="tax" if tax else "statement"))
-    return docs
+                           href=first.href if PDF_HREF_RE.search(first.href or "") else "",
+                           text=f"American Family {kind_title} {disp}", row_index=first.index,
+                           kind=kind, rows=len(_rows_of(controls))))
 
 
-def _control_for(page, iso: str, new_only: bool = False):
-    """The control for the document dated `iso`, matched the same way
-    discovery found it, or None. With `new_only`, only among what a bill's
-    Bill details brought."""
-    for _i, el, name, found, _row in _statement_controls(page, new_only=new_only):
-        if found == iso:
-            return el, name
-    return None, ""
+# Why the download pressed nothing, in the only words that may say so.
+_REFUSALS = (
+    "the title does not say which kind of document it is",
+    "discovery found more than one row of this date holding this kind of document",
+    "a document control on the page could not be read",
+    "no control of this date is this kind of document",
+    "more than one row of this date holds this kind of document",
+    "the control was not the same when read again",
+)
+
+
+def _nothing_pressed(trace: Optional[list], why: str, iso: str, survey=(), mine=()) -> None:
+    """Write down why nothing was pressed, in fixed words and counts."""
+    log.info("pressed nothing for the document of %s, %s", iso, why)
+    if trace is not None:
+        trace.append({"note": "nothing was pressed",
+                      "why": why if why in _REFUSALS else "unrecognized",
+                      "controls_read": len(survey),
+                      "unread": int(getattr(survey, "unread", 0)),
+                      "unsure": int(getattr(survey, "unsure", 0)),
+                      "rows_of_this_date_and_kind": len(_rows_of(mine))})
+
+
+def _control_for(page, iso: str, kind: Optional[str], trace: Optional[list] = None,
+                 rows_found: int = 1, new_only: bool = False):
+    """The control for the document of date `iso` and kind `kind`, read the
+    way discovery read it, or (None, "") with the reason written down. With
+    `new_only`, only among what a bill's Bill details brought.
+
+    `rows_found` is how many rows of this date and kind discovery saw. More
+    than one is refused at once, since a twin discovery saw may not be
+    drawn when the download looks. Then the whole page is read. A control
+    that would not answer could be this document's twin, and a second row
+    of this date holding this kind is another document, so either means
+    nothing is pressed. Of the one row's controls the first is taken, as it
+    always was. That element is read again just before it is handed back,
+    and must still be in the page and read as it did, so the control
+    pressed is the one that was read."""
+    if kind not in KIND_TITLES:
+        _nothing_pressed(trace, "the title does not say which kind of document it is", iso)
+        return None, ""
+    if rows_found > 1:
+        _nothing_pressed(trace, "discovery found more than one row of this date holding this kind of document",
+                         iso)
+        return None, ""
+    survey = _survey(page, new_only)
+    mine = [c for c in survey if c.iso == iso and c.kind == kind]
+    rows = _rows_of(mine)
+    if survey.unread:
+        _nothing_pressed(trace, "a document control on the page could not be read", iso, survey, mine)
+        return None, ""
+    if not mine:
+        _nothing_pressed(trace, "no control of this date is this kind of document", iso, survey, mine)
+        return None, ""
+    if len(rows) > 1:
+        _nothing_pressed(trace, "more than one row of this date holds this kind of document", iso, survey, mine)
+        return None, ""
+    chosen = mine[0]
+    try:
+        again = _read_control(chosen.el, chosen.index, new_only)
+    except Exception:
+        again = None
+    if again is None or (again.name, again.iso, again.kind, again.row, again.doubt) != \
+            (chosen.name, chosen.iso, chosen.kind, chosen.row, ""):
+        _nothing_pressed(trace, "the control was not the same when read again", iso, survey, mine)
+        return None, ""
+    return chosen.el, chosen.name
 
 
 # ---------------------------------------------------------------------------
@@ -1862,11 +2221,12 @@ def _catch_pdf(page, el, label: str, out_path: Path, trace: Optional[list] = Non
 
 
 def download_bill(page, dl_dir, iso_date: str, out_path, title: str = "",
-                  trace: Optional[list] = None, account: str = "") -> bool:
-    """Save the document dated `iso_date`. A PDF link on the row is fetched
-    from inside the page. Otherwise the row's own control is clicked, once
-    it has passed the guard, and whichever the site produces is caught, a
-    download event or a PDF response, in this tab or one it opens.
+                  trace: Optional[list] = None, account: str = "", rows: int = 1) -> bool:
+    """Save the document dated `iso_date` of the kind its `title` names,
+    the title discovery wrote. A PDF link on the row is fetched from inside
+    the page. Otherwise the row's own control is clicked, once it has
+    passed the guard, and whichever the site produces is caught, a download
+    event or a PDF response, in this tab or one it opens.
 
     `account` is the account part of the bill the document was found
     under. Where Billing & Payments lists bills, that bill's Bill details
@@ -1875,7 +2235,8 @@ def download_bill(page, dl_dir, iso_date: str, out_path, title: str = "",
     from a page that shows none.
 
     `dl_dir` is where the attached browser saves a download, watched
-    after every click."""
+    after every click. `rows` is how many rows of the bill's list discovery
+    found holding a document of this date and kind."""
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     if not goto_documents(page):
@@ -1903,9 +2264,8 @@ def download_bill(page, dl_dir, iso_date: str, out_path, title: str = "",
             log.info("the bill's statements are left alone, %s", refusal)
             return False
 
-    el, label = _control_for(page, iso_date, new_only=view is not None)
+    el, label = _control_for(page, iso_date, kind_of_title(title), trace, rows, new_only=view is not None)
     if el is None:
-        log.info("no document control found for %s", iso_date)
         return False
     if not _safe_to_press(el, label):
         log.info("refusing unsafe control %r for %s", label, iso_date)

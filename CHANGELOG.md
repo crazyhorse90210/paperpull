@@ -7,6 +7,41 @@ All notable changes to PaperPull are recorded here. Versioning follows
 - **MINOR**, a new app, or a cross-app feature
 - **MAJOR**, breaking changes (repo layout, config format, removing an app)
 
+## [Unreleased]
+
+### Fixed
+- **SBA and American Family tell a statement from a tax form of the same
+  day.** Both kept one document for each date, named for the first control
+  of that date they could read, and the download pressed the first control
+  carrying the date, whatever it fetched, the shape Wells Fargo was fixed
+  for in 0.42.0. So when a 1098 or a 1099 and a statement shared a date
+  only one of them was ever found. And when the tax form could not be read
+  while the page was surveyed, it was passed over, the date was recorded
+  as the statement, and the download pressed the tax form and filed it as
+  the statement. Now both read a control the way Wells Fargo does. A
+  document is its date, its kind and the entry it sits in, so a statement
+  and a tax form of one day are two documents, each pressed for itself,
+  while View and Download of one statement stay one. Each control is read
+  two ways, the way the app always read it, American Family's own row rule
+  included, and with care, never taking another control's words or dates
+  or a date printed over a list of rows. Read with care, the last digits
+  of a masked number, a loan or a policy ending in 1099, are never a tax
+  form, and a link that names only its date takes its kind from the part
+  of the page that holds it alone. A control is filed only where the two
+  readings agree on its date and its kind, and where they disagree it is
+  left for a person and counted in Diagnose. Two entries of one day
+  holding the same kind cannot be told apart, and that document is refused
+  rather than guessed at, even when the download can see only one of the
+  two. A control that would not answer stops the download from choosing
+  past it, American Family's included when the page draws it again while
+  it is read, and the control chosen is read again as the element that is
+  then pressed. American Family reads each bill's list behind its Bill
+  details this way, and its titles still name the two kinds it has always
+  listed.
+  Found by reading the code and proven in a browser before the change.
+  Both apps are still untested, so no archive is known to hold a misfiled
+  document.
+
 ## [0.57.1] - 2026-10-22
 
 A run whose documents go to a documents folder says what it saved again,

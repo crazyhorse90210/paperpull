@@ -85,7 +85,7 @@ def test_a_statement_opened_as_a_blob_tab_and_revoked_is_saved(drive, tmp_path, 
     page = drive(control)
     out = tmp_path / "Statements" / "2026-09-12 American Family Account Statement.pdf"
     trace: list = []
-    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", out,
+    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", out, title=_titled("2026-09-12"),
                               trace=trace) is True, trace
     assert out.read_bytes().startswith(b"%PDF-")
     assert b"invented statement 09/12/2026" in out.read_bytes()
@@ -96,6 +96,13 @@ def test_a_statement_opened_as_a_blob_tab_and_revoked_is_saved(drive, tmp_path, 
 
 def _pressable(words):
     return bool(site.BILL_CONTROL_RE.search(words)) and site.is_safe_control(words)
+
+
+def _titled(iso: str) -> str:
+    """The title discovery writes for the statement of `iso`. The download
+    reads the kind back out of it, and presses nothing for a title that
+    names none."""
+    return "%s - %s" % (site.KIND_TITLES["statement"], site._human_date(iso))
 
 
 def test_the_payment_button_on_the_billing_page_is_never_a_document():
@@ -166,7 +173,7 @@ def test_the_overview_tab_is_left_for_billing_and_payments(drive, tmp_path):
         status=200, content_type="text/html", body=OVERVIEW))
     page.goto("%s/overview" % BASE)
     out = tmp_path / "Statements" / "2026-09-12 American Family Account Statement.pdf"
-    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", out) is True
+    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", out, title=_titled("2026-09-12")) is True
     assert b"invented statement 09/12/2026" in out.read_bytes()
     assert b"ID card" not in out.read_bytes()
 
@@ -174,7 +181,7 @@ def test_the_overview_tab_is_left_for_billing_and_payments(drive, tmp_path):
 def test_a_second_pdf_the_same_press_makes_is_not_taken_for_the_statement(drive, tmp_path):
     page = drive(TWO_BLOBS)
     out = tmp_path / "Statements" / "2026-09-12 American Family Account Statement.pdf"
-    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", out) is True
+    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", out, title=_titled("2026-09-12")) is True
     assert b"invented statement 09/12/2026" in out.read_bytes()
 
 
@@ -182,7 +189,7 @@ def test_a_pdf_made_without_a_tab_of_its_own_is_never_taken(drive, tmp_path, mon
     """A late PDF from an earlier press, or anything else the page makes."""
     page = drive(NO_TAB)
     out = tmp_path / "Statements" / "2026-09-12 American Family Account Statement.pdf"
-    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", out) is False
+    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", out, title=_titled("2026-09-12")) is False
     assert not out.exists()
 
 
@@ -273,7 +280,7 @@ def test_a_paperless_card_above_the_statements_is_never_pressed(billing, tmp_pat
     page = billing(_page(card + STATEMENT_ROW))
     assert [d.date_text for d in site.collect_download_docs(page)] == ["2026-09-12"]
     out = tmp_path / "Statements" / "2026-10-01 American Family Account Statement.pdf"
-    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-10-01", out) is False
+    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-10-01", out, title=_titled("2026-10-01")) is False
     assert page.evaluate("window.__changed") is False
     assert page.evaluate("window.__paid") is False
 
@@ -291,7 +298,7 @@ def test_another_document_on_the_billing_page_is_not_a_statement(billing, tmp_pa
     page = billing(_page(OTHER_ROWS + STATEMENT_ROW))
     assert [d.date_text for d in site.collect_download_docs(page)] == ["2026-09-12"]
     out = tmp_path / "Statements" / "2026-09-12 American Family Account Statement.pdf"
-    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", out) is True
+    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", out, title=_titled("2026-09-12")) is True
     assert b"statement 09/12/2026" in out.read_bytes()
     assert b"ID card" not in out.read_bytes()
 
@@ -301,7 +308,7 @@ def test_a_bare_view_in_a_statement_row_is_still_found(billing, tmp_path):
            "<button onclick=\"openPdf('statement 09/12/2026')\">View</button></div>")
     page = billing(_page(row))
     out = tmp_path / "Statements" / "2026-09-12 American Family Account Statement.pdf"
-    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", out) is True
+    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", out, title=_titled("2026-09-12")) is True
     assert b"statement 09/12/2026" in out.read_bytes()
 
 
@@ -323,8 +330,8 @@ def test_a_pdf_that_comes_after_its_press_was_given_up_is_not_the_next_statement
     folder = tmp_path / "Statements"
     august = folder / "2026-08-12 American Family Account Statement.pdf"
     september = folder / "2026-09-12 American Family Account Statement.pdf"
-    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-08-12", august) is False
-    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", september) is False
+    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-08-12", august, title=_titled("2026-08-12")) is False
+    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", september, title=_titled("2026-09-12")) is False
     assert not september.exists() and not august.exists()
 
 
@@ -340,7 +347,7 @@ def test_only_billing_and_payments_is_used(billing, tmp_path):
     page = billing(escrow, documents)
     assert site.goto_documents(page) is False
     out = tmp_path / "Statements" / "2026-09-12 American Family Account Statement.pdf"
-    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", out) is False
+    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", out, title=_titled("2026-09-12")) is False
     assert not out.exists()
     assert site.BILLING_URL == BASE + "/billing"
 
@@ -357,7 +364,7 @@ def test_a_blob_opened_with_a_fragment_is_its_own_blob(billing, tmp_path):
               " URL.revokeObjectURL(url); }")
     page = billing(_page(row, script))
     out = tmp_path / "Statements" / "2026-09-12 American Family Account Statement.pdf"
-    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", out) is True
+    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", out, title=_titled("2026-09-12")) is True
     assert b"statement 09/12/2026" in out.read_bytes()
 
 
@@ -379,7 +386,7 @@ def test_a_document_in_a_row_with_no_date_is_not_the_newest_statement(billing, t
     page = billing(_page("<div data-cy='list'>" + SUMMARY + agreement + STATEMENT_ROW + AUGUST_ROW + "</div>"))
     assert [d.date_text for d in site.collect_download_docs(page)] == ["2026-09-12", "2026-08-12"]
     out = tmp_path / "Statements" / "2026-09-12 American Family Account Statement.pdf"
-    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", out) is True
+    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", out, title=_titled("2026-09-12")) is True
     assert b"statement 09/12/2026" in out.read_bytes()
 
 
@@ -405,7 +412,7 @@ def test_a_press_is_refused_where_another_control_sits_at_its_center(billing, tm
     changed = []
     page.context.route("%s/changed" % BASE, lambda r: changed.append(1) or r.fulfill(status=204, body=""))
     out = tmp_path / "Statements" / "2026-09-12 American Family Account Statement.pdf"
-    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", out) is False
+    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", out, title=_titled("2026-09-12")) is False
     assert changed == []
 
 
@@ -421,7 +428,7 @@ def test_a_control_is_pressed_only_when_every_word_it_shows_or_announces_is_safe
     page = billing(_page(row))
     assert site.collect_download_docs(page) == []
     out = tmp_path / "Statements" / "2026-09-12 American Family Account Statement.pdf"
-    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", out) is False
+    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", out, title=_titled("2026-09-12")) is False
     assert page.evaluate("window.__changed") is False
 
 
@@ -457,7 +464,7 @@ def test_a_card_naming_two_statements_is_filed_under_neither(billing, tmp_path):
     page = billing(_page(card + AUGUST_ROW))
     assert [d.date_text for d in site.collect_download_docs(page)] == ["2026-08-12"]
     out = tmp_path / "Statements" / "2026-08-12 American Family Account Statement.pdf"
-    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-08-12", out) is True
+    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-08-12", out, title=_titled("2026-08-12")) is True
     assert b"statement 08/12/2026" in out.read_bytes()
 
 
@@ -525,7 +532,7 @@ def test_a_link_around_a_button_with_the_same_words_is_pressed(billing, tmp_path
            "<button>View bill</button></a></div>")
     page = billing(_page(row))
     out = tmp_path / "Statements" / "2026-09-12 American Family Account Statement.pdf"
-    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", out) is True
+    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", out, title=_titled("2026-09-12")) is True
     assert b"statement 09/12/2026" in out.read_bytes()
 
 
@@ -544,7 +551,7 @@ def test_a_bare_control_in_a_row_that_mentions_a_payment_is_left_alone(billing, 
     page = billing(_page(row + STATEMENT_ROW))
     assert [d.date_text for d in site.collect_download_docs(page)] == ["2026-09-12"]
     out = tmp_path / "Statements" / "2026-09-12 American Family Account Statement.pdf"
-    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", out) is True
+    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", out, title=_titled("2026-09-12")) is True
     assert b"statement 09/12/2026" in out.read_bytes()
 
 
@@ -621,7 +628,7 @@ def test_a_payment_word_run_into_a_number_still_leaves_the_row_alone(billing, tm
            "<button onclick=\"openPdf('payment receipt')\">View</button></div>")
     page = billing(_page(row + STATEMENT_ROW))
     out = tmp_path / "Statements" / "2026-09-12 American Family Account Statement.pdf"
-    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", out) is True
+    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", out, title=_titled("2026-09-12")) is True
     assert b"statement 09/12/2026" in out.read_bytes()
 
 
@@ -641,7 +648,7 @@ def test_words_run_together_inside_a_control_are_each_checked(billing, tmp_path)
     page = billing(_page(row))
     assert site.collect_download_docs(page) == []
     out = tmp_path / "Statements" / "2026-09-12 American Family Account Statement.pdf"
-    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", out) is False
+    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", out, title=_titled("2026-09-12")) is False
     assert page.evaluate("window.__changed") is False
 
 
@@ -654,7 +661,7 @@ def test_a_date_the_page_hides_is_never_a_statements_date(billing, tmp_path):
             "<button onclick=\"openPdf('statement 09/12/2026')\">View bill</button></div>")
     page = billing(_page(card + AUGUST_ROW))
     out = tmp_path / "Statements" / "2026-08-12 American Family Account Statement.pdf"
-    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-08-12", out) is True
+    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-08-12", out, title=_titled("2026-08-12")) is True
     assert b"statement 08/12/2026" in out.read_bytes()
 
 
@@ -692,7 +699,7 @@ def test_the_statement_link_his_recording_pressed_is_found(billing, tmp_path):
     assert [d.date_text for d in site.collect_download_docs(page)] == [
         "2026-09-12", "2026-08-12", "2026-07-12"]
     out = tmp_path / "Statements" / "2026-08-12 American Family Account Statement.pdf"
-    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-08-12", out) is True
+    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-08-12", out, title=_titled("2026-08-12")) is True
     assert b"statement 08/12/2026" in out.read_bytes()
     assert page.evaluate("window.__paid") is False
 
@@ -702,7 +709,7 @@ def test_a_marked_link_whose_words_refuse_is_never_pressed(billing, tmp_path, ti
     page = billing(_page(_marked_row("09/12/2026", "statement 09/12/2026", title=title)))
     assert site.collect_download_docs(page) == []
     out = tmp_path / "Statements" / "2026-09-12 American Family Account Statement.pdf"
-    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", out) is False
+    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", out, title=_titled("2026-09-12")) is False
     assert not out.exists()
 
 
@@ -750,7 +757,7 @@ def test_another_documents_marked_link_is_not_the_statement(billing, tmp_path, w
                          + _marked_row("09/12/2026", "statement 09/12/2026")))
     assert [d.date_text for d in site.collect_download_docs(page)] == ["2026-09-12"]
     out = tmp_path / "Statements" / "2026-09-12 American Family Account Statement.pdf"
-    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", out) is True
+    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", out, title=_titled("2026-09-12")) is True
     assert b"statement 09/12/2026" in out.read_bytes()
 
 
@@ -774,7 +781,7 @@ def test_a_marked_control_the_guard_cannot_read_is_never_pressed(billing, tmp_pa
     page.context.route("%s/changed" % BASE, lambda r: changed.append(1) or r.fulfill(status=204, body=""))
     assert site.collect_download_docs(page) == []
     out = tmp_path / "Statements" / "2026-09-12 American Family Account Statement.pdf"
-    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", out) is False
+    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", out, title=_titled("2026-09-12")) is False
     assert changed == []
 
 
@@ -793,7 +800,7 @@ def test_a_hidden_copy_ahead_of_the_shown_link_is_never_the_one_pressed(billing,
     hidden = ("<div style='display:none'>%s</div>" % _marked_row("09/12/2026", "hidden copy"))
     page = billing(_page(hidden + _marked_row("09/12/2026", "statement 09/12/2026")))
     out = tmp_path / "Statements" / "2026-09-12 American Family Account Statement.pdf"
-    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", out) is True
+    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", out, title=_titled("2026-09-12")) is True
     assert b"statement 09/12/2026" in out.read_bytes()
 
 
@@ -827,7 +834,7 @@ def test_a_tab_that_reaches_playwright_after_its_statement_was_taken_is_closed(
     monkeypatch.setattr(site.blob_capture, "take", take)
     out = tmp_path / "Statements" / "2026-09-12 American Family Account Statement.pdf"
     trace: list = []
-    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", out,
+    assert site.download_bill(page, tmp_path / ".amfam-downloads", "2026-09-12", out, title=_titled("2026-09-12"),
                               trace=trace) is True, trace
     assert {"note": "the page made the PDF itself, a blob it opened"} in trace
     # The tab has to have reached Playwright before whether it was closed

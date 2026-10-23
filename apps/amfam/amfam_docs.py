@@ -108,6 +108,10 @@ class Document:
         self.pdf_sha256 = kw.get("pdf_sha256", "")
         self.notes = kw.get("notes", "")
         self.discovered_at = kw.get("discovered_at", now_iso())
+        # How many rows of the bill's list discovery last found holding a
+        # document of this date and kind. More than one cannot be told apart,
+        # and the download refuses it even when it can only see one of them.
+        self.rows = kw.get("rows", 1)
 
     @property
     def key(self) -> str:
@@ -425,17 +429,19 @@ class App:
         # The account part of the bill it was found under, in its key and
         # its name, since two bills can each have a statement of one date.
         acct = (getattr(r, "account", "") or "").strip()
+        rows = getattr(r, "rows", 1)
         doc = Document(title=title, category=category,
                        summary=f"{summary} {acct}" if acct else summary,
                        date=date, confidence=confidence, source_url=source_url,
-                       account=acct)
+                       account=acct, rows=rows)
         if self.discovery.get(doc.key) is None:
             rec = doc.to_dict()
             rec["state"] = State.DISCOVERED.value
             self.discovery.update(doc.key, rec, save=False)
             return 1
-        # refresh which page the doc's download link lives on
-        self.discovery.update(doc.key, {"source_url": source_url}, save=False)
+        # refresh which page the doc's download link lives on, and how many
+        # rows it was found in this time
+        self.discovery.update(doc.key, {"source_url": source_url, "rows": rows}, save=False)
         return 0
 
     def cmd_discover(self, quiet: bool = False) -> int:
@@ -602,7 +608,8 @@ class App:
             return
         trace: list = []
         saved = site.download_bill(page, self._dl_dir, doc.date, out_path,
-                                   title=doc.title, trace=trace, account=doc.account)
+                                   title=doc.title, trace=trace, account=doc.account,
+                                   rows=doc.rows)
         # A capture that failed must not leave a convincing empty file behind.
         # A ZIP the capture took stays, for the branch below that opens it.
         if out_path.exists() and not (saved and receipt_pdf.is_zip(out_path)) and (
@@ -1021,9 +1028,15 @@ class App:
                 except Exception as e:
                     info["row_counts"][name] = f"ERR {e}"
             found_docs = site.collect_download_docs(page) if found else []
-            info["documents_recognized"] = [{"date": b.date_text, "kind": b.kind, "has_pdf_link": bool(b.href),
-                                             "bill": bool(b.account)}
+            # A document whose date and kind more than one row holds is one
+            # the download refuses, a control that would not answer is one
+            # nothing was learned from, and a control read two ways that
+            # disagree is one left for a person, so a repair needs all three.
+            info["documents_recognized"] = [{"date": b.date_text, "kind": b.kind, "rows": b.rows,
+                                             "has_pdf_link": bool(b.href), "bill": bool(b.account)}
                                             for b in found_docs[:40]]
+            info["document_controls_unread"] = getattr(found_docs, "unread", 0)
+            info["document_controls_unsure"] = getattr(found_docs, "unsure", 0)
             docs = site.collect_documents(page)
             info["rows_collected"] = len(docs)
             info["samples"] = []
