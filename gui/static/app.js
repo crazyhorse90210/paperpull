@@ -1923,7 +1923,10 @@ async function dcLoad() {
   $('dcnow').textContent = d.documents_dir
     ? (d.follows ? 'From the folder for every provider, documents' : 'Set for them alone, documents') +
       ' go to ' + d.documents_dir + '. Records stay in ' + d.output_dir + '.'
-    // One added since the folder was saved gets it as its next download starts.
+    // One added since the folder was saved gets it as its next download
+    // starts, unless that run would refuse it, which is said instead.
+    : d.follows && d.in_root && d.in_root_refused ? 'Documents and records both go to ' + d.output_dir +
+      ', since their download runs will not use ' + d.in_root + '. ' + d.in_root_refused
     : d.follows && d.in_root ? 'From the folder for every provider, documents go to ' + d.in_root +
       ' from their next download. Records stay in ' + d.output_dir + '.'
     : 'Documents and records both go to ' + d.output_dir + '.';

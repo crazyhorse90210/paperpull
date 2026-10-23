@@ -904,6 +904,12 @@ def test_a_run_gives_no_folder_inside_a_folder_of_their_own(apps, tmp_path):
         "Chase Statements, spouse" in said[0], said
     assert "documents_dir" not in config(target)
     assert not (target / "Backups").exists()
+    # The page says so, rather than promise the folder from their next
+    # download.
+    got = app_module.api_documents("Target Receipts")
+    assert got["follows"] and "Chase Statements, spouse" in got["in_root_refused"], got
+    assert app_module.api_documents("Chase Statements", "spouse")["in_root_refused"] == "", \
+        "one whose config names a folder is not refused anything"
     # Nor does following it, for anyone but that person.
     with pytest.raises(HTTPException) as e:
         save({"app": "Chase Statements", "follow": True})
@@ -971,3 +977,56 @@ def test_two_writes_of_one_config_at_once_keep_the_config_as_it_was(apps, monkey
     assert len(kept) == 2
     now = config(apps["Target Receipts"])
     assert now["documents_dir"] == "A" and now["filename_pattern"] == "{date}", now
+
+
+# -- the fresh review of minors-0571 ------------------------------------------
+#
+# The fill is asked again of the config as it is written, so a folder of
+# their own saved in another tab meanwhile is kept, and every writer of an
+# account's config in the panel holds the one lock.
+
+def test_a_folder_saved_in_another_tab_meanwhile_is_kept(apps, tmp_path, monkeypatch):
+    """The fill had decided to write before the save landed, and wrote over
+    it, so the page said the person's own folder and the run used the folder
+    for every provider."""
+    docs, mine = tmp_path / "Drive", tmp_path / "Mine"
+    app_module._write_settings({"documents_root": str(docs)})
+    real = app_module._in_root_problem
+
+    def meanwhile(*args):
+        save({"app": "Target Receipts", "folder": str(mine)})
+        return real(*args)
+    monkeypatch.setattr(app_module, "_in_root_problem", meanwhile)
+    missed = []
+    assert app_module._sync_documents(app_module.discover_apps(), str(docs),
+                                      only=("Target Receipts", "primary"), missed=missed) == 0
+    assert config(apps["Target Receipts"])["documents_dir"] == str(mine)
+    assert missed == [], "a choice kept is not a config that could not be written"
+
+
+def test_every_writer_of_a_config_holds_the_one_lock(apps, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    target = apps["Target Receipts"]
+    cfg = target / "config.json"
+    (target / "config.example.json").write_text(json.dumps({"output_dir": ".", "new": 1}),
+                                                encoding="utf-8")
+    held = []
+    for name in ("_write_text", "_replace_text"):
+        real = getattr(app_module, name)
+
+        def wrote(path, text, real=real):
+            held.append(app_module._CONFIG_WRITES.locked())
+            real(path, text)
+        monkeypatch.setattr(app_module, name, wrote)
+    app_module._set_profile(cfg, "kept-profile")
+    app_module._set_owner(cfg, "Dana Example")
+    assert app_module.ensure_settings(target, "t") == ["new"]
+    migrate = SimpleNamespace(settings_to_apply=lambda install, cfg, settings,
+                              check_pattern=None: {"browser": "bundled"})
+    app_module._apply_settings(migrate, cfg, target, {"browser": "bundled"})
+    assert app_module._write_config(cfg, "documents_dir", str(tmp_path / "W"), "t", why="documents")
+    now = config(target)
+    assert (now["profile_dir"], now["owner"], now["new"], now["browser"]) == \
+        ("kept-profile", "Dana Example", 1, "bundled")
+    assert held == [True] * 5, held
+    assert not app_module._CONFIG_WRITES.locked()

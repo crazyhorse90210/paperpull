@@ -1821,12 +1821,13 @@ def _set_profile(config: Path, profile: str) -> None:
     saying what is true."""
     if not server_mode.own_file(config):
         return
-    try:
-        data = json.loads(config.read_text(encoding="utf-8-sig"))
-    except (OSError, ValueError):
-        return
-    data["profile_dir"] = profile
-    _write_text(config, json.dumps(data, indent=2))
+    with _CONFIG_WRITES:
+        try:
+            data = json.loads(config.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            return
+        data["profile_dir"] = profile
+        _write_text(config, json.dumps(data, indent=2))
 
 
 def _set_owner(config: Path, owner: str) -> None:
@@ -1840,11 +1841,12 @@ def _set_owner(config: Path, owner: str) -> None:
     if not server_mode.own_file(config):
         return
     try:
-        data = json.loads(config.read_text(encoding="utf-8-sig"))
-        if not isinstance(data, dict):
-            return
-        data["owner"] = owner[:80]
-        _write_text(config, json.dumps(data, indent=2))
+        with _CONFIG_WRITES:
+            data = json.loads(config.read_text(encoding="utf-8-sig"))
+            if not isinstance(data, dict):
+                return
+            data["owner"] = owner[:80]
+            _write_text(config, json.dumps(data, indent=2))
     except (OSError, ValueError):
         pass
 
@@ -1967,6 +1969,12 @@ def ensure_settings(dst: Path, stamp: str = "") -> list:
         return []
     if not (server_mode.own_file(live) and server_mode.own_file(example)):
         return []
+    # Read and written as the panel's other writes of a config are.
+    with _CONFIG_WRITES:
+        return _add_settings(dst, example, live, stamp)
+
+
+def _add_settings(dst: Path, example: Path, live: Path, stamp: str) -> list:
     try:
         template = json.loads(example.read_text(encoding="utf-8-sig"))
         current = json.loads(live.read_text(encoding="utf-8-sig"))
@@ -2523,16 +2531,17 @@ def _apply_settings(mod, cfg_path: Path, install: Path, settings: dict) -> None:
     folders, profile, browser or port, which belong to this computer."""
     if not server_mode.own_file(cfg_path):
         return
-    cfg = _read_json(cfg_path)
-    if not isinstance(cfg, dict):
-        return
     naming = _naming()
-    take = mod.settings_to_apply(install, cfg, settings,
-                                 check_pattern=naming.check if naming else None)
-    if not take:
-        return
-    cfg.update(take)
-    _replace_text(cfg_path, json.dumps(cfg, indent=2) + "\n")
+    with _CONFIG_WRITES:
+        cfg = _read_json(cfg_path)
+        if not isinstance(cfg, dict):
+            return
+        take = mod.settings_to_apply(install, cfg, settings,
+                                     check_pattern=naming.check if naming else None)
+        if not take:
+            return
+        cfg.update(take)
+        _replace_text(cfg_path, json.dumps(cfg, indent=2) + "\n")
 
 
 def _template_for(entry: dict, providers: list):
@@ -3844,30 +3853,35 @@ def _naming_app(name: str) -> Path:
 
 
 def _write_config(cfg_path: Path, key: str, value: str, stamp: str,
-                  why: str = "naming", keep_empty: bool = False) -> bool:
+                  why: str = "naming", keep_empty: bool = False, when=None) -> bool:
     """Set or clear one key, backed up first and written in one step, so a
     crash part way leaves the old file whole. The copy goes in
     Backups/<why>-<stamp>. With keep_empty an empty value is written as
-    "", rather than the key taken out."""
+    "", rather than the key taken out. `when` is asked of the config as it
+    is read here, and nothing is written unless it says True, so a choice
+    saved since the caller looked at the config is kept."""
     if not server_mode.own_file(cfg_path):
         return False
     # One write at a time (_CONFIG_WRITES), the config read inside it.
     with _CONFIG_WRITES:
-        return _write_config_now(cfg_path, key, value, stamp, why, keep_empty)
+        return _write_config_now(cfg_path, key, value, stamp, why, keep_empty, when)
 
 
-# Held while one config is read, copied and written. Two at once, a run
-# filling in its documents folder in one tab and a save in another, each
-# read the config before the other wrote it and took the same Backups
-# folder, so one change was lost, and the copy kept was the other's change
-# or, once the two tripped over one temporary file, no copy at all.
+# Held while one config is read, copied and written, by every writer of an
+# account's config in the panel. Two at once, a run filling in its documents
+# folder in one tab and a save in another, each read the config before the
+# other wrote it and took the same Backups folder, so one change was lost,
+# and the copy kept was the other's change or, once the two tripped over
+# one temporary file, no copy at all.
 _CONFIG_WRITES = threading.Lock()
 
 
 def _write_config_now(cfg_path: Path, key: str, value: str, stamp: str, why: str,
-                      keep_empty: bool) -> bool:
+                      keep_empty: bool, when=None) -> bool:
     current = _read_json(cfg_path)
     if not isinstance(current, dict):
+        return False
+    if when is not None and not when(current):
         return False
     if keep_empty and not value:
         if current.get(key) == "":
@@ -4174,7 +4188,11 @@ def _follows_root(meta: dict, account: str, root: str) -> bool:
     """Whether an account's documents folder follows the one documents
     folder, its config naming none or the folder the root gives it. Any
     other value, "" for its own folder included, is one set for it alone."""
-    cfg = _config_of(meta, account)
+    return _follows(_config_of(meta, account), meta, account, root)
+
+
+def _follows(cfg: dict, meta: dict, account: str, root: str) -> bool:
+    """_follows_root of a config already read."""
     if DOCUMENTS_KEY not in cfg:
         return True
     value = cfg[DOCUMENTS_KEY]
@@ -4345,8 +4363,14 @@ def _sync_documents(apps: dict, old: str, only=None, force: bool = False,
             want = _documents_for(meta, account, root)
             if want and _in_root_problem(apps, name, account, root):
                 continue
-            if _write_config(cfg_path, DOCUMENTS_KEY, want, stamp, why="documents"):
+            # Asked again of the config as it is written, so a folder of
+            # their own saved in another tab since is kept.
+            still = None if force else (
+                lambda cfg, meta=meta, account=account: _follows(cfg, meta, account, old))
+            if _write_config(cfg_path, DOCUMENTS_KEY, want, stamp, why="documents", when=still):
                 written += 1
+                continue
+            if not force and not _follows_root(meta, account, old):
                 continue
             # Nothing to change, or a config that could not be read or written.
             now = _read_json(cfg_path)
@@ -4530,10 +4554,17 @@ def _documents_answer(meta: dict, account: str, root: Path, apps: dict = None) -
     if apps is None:
         apps = discover_apps()
     following, own = _documents_counts(apps, docs_root)
+    # Why the folder the page would say they get from their next download
+    # is one that run will refuse (_documents_before_run), or "".
+    refused = ""
+    if docs_root and DOCUMENTS_KEY not in _config_of(meta, account) and meta["name"] in apps:
+        refused = (_in_root_problem(apps, meta["name"], account, docs_root)
+                   or _root_held_problem(apps, docs_root) or "")
     return {"documents_dir": _documents_of(meta, account), "output_dir": str(root),
             "documents_root": docs_root,
             "follows": bool(docs_root) and _follows_root(meta, account, docs_root),
             "in_root": _documents_for(meta, account, docs_root),
+            "in_root_refused": refused,
             "following": following,
             "unfollowed": len(own),
             "own": own,

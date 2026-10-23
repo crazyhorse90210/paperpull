@@ -15,9 +15,13 @@ All notable changes to PaperPull are recorded here. Versioning follows
   was the folder for every provider or inside another person's folder in
   it, but not one around it, so a spouse's own `D:\Docs` with
   `D:\Docs\PaperPull` for every provider put everyone's documents inside
-  the spouse's folder. That is refused now whichever is saved first, and a
-  run gives a person added since no folder inside such a folder. **Use it
-  for every provider** still replaces it.
+  the spouse's folder. That is refused now whichever is saved first, so to
+  use such a folder for every provider, choose another folder for that
+  person first. A run gives a person added since no folder inside such a
+  folder, and the page says so rather than promise one. Where an earlier
+  version already saved the folder for every provider inside a person's
+  own, **Use it for every provider** gives that person a folder inside it
+  too.
 - **Move documents goes where the page says.** The panel filled in a
   person's folder in the folder for every provider before any action, a
   Move and its preview included. So an account with no documents folder
@@ -26,13 +30,15 @@ All notable changes to PaperPull are recorded here. Versioning follows
   had them moved into the folder for every provider. The folder is now
   filled in only before a download run, Pilot, Run All or Resume, and the
   page says it comes with their next download.
-- **Two changes to one config at once keep both, and the copy of it as it
-  was.** A run filling in its documents folder in one tab and a save in
-  another could each read the config before the other wrote it, so one
-  change was lost, and they could take one Backups folder, so the copy of
-  the config as it was could be written over, or deleted along with that
-  folder when one of the two writes failed. The panel now writes one
-  config at a time.
+- **Two changes to one config at once no longer undo each other or its
+  copy in Backups.** A run filling in its documents folder in one tab and a
+  save in another could each read the config before the other wrote it, so
+  one change was lost, and they could take one Backups folder, so the copy
+  of the config as it was could be written over, or deleted along with that
+  folder when one of the two writes failed. Every write of a provider's or
+  person's config in the panel now waits for the one before it, adding a
+  person, an import and the settings an update adds included, and a run
+  fills in a documents folder only if nobody chose one meanwhile.
 - **A config in a folder whose name is not UTF-8 is refused for what it
   is.** On Linux such a name reaches PaperPull as half characters, and a
   run can neither print it under the control panel nor keep it in its
