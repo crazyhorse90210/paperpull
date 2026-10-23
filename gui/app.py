@@ -3492,6 +3492,8 @@ def _start_run(app: str, account: str, action: str, scope_flags, redownload=Fals
                                  "started": datetime.now().isoformat(timespec="seconds")}
         noted = False
         handed = None
+        # What the run saved, read once its process has ended (below).
+        saved = None
 
         def note(code, result, closed=False):
             if root is None:
@@ -3503,7 +3505,7 @@ def _start_run(app: str, account: str, action: str, scope_flags, redownload=Fals
                     "ended": datetime.now().isoformat(timespec="seconds"),
                     "exit_code": code, "closed": closed, "result": result,
                     "scope": list(scope_flags), "redownload": bool(redownload),
-                    "saved": _saved_this_run(root, started)})
+                    "saved": _saved_this_run(root, started) if saved is None else saved})
             except Exception:
                 pass
         try:
@@ -3574,6 +3576,13 @@ def _start_run(app: str, account: str, action: str, scope_flags, redownload=Fals
                 else:
                     yield _event(line.rstrip())
             code = await to_thread.run_sync(proc.wait)
+            # What the run saved, from its new-this-run.txt, read as soon as
+            # it has ended and before anything else runs for the account.
+            # The move below is the app's own Rename, which wrote a list of
+            # its own with nothing in it (#103), so a list read after it said
+            # a run that saved 23 statements had saved nothing. Read once,
+            # this is what the move takes, the page lists and the log keeps.
+            saved = _saved_this_run(root, started) if root is not None else []
             # On PaperPull Server the plug-ins hear the run ended, the
             # Paperless copy among them, and what they say joins the output.
             if server_mode.enabled():
@@ -3585,15 +3594,14 @@ def _start_run(app: str, account: str, action: str, scope_flags, redownload=Fals
             # account's documents folder, if it has one (#102), after the
             # plug-ins have read each file where the run saved it.
             if action in DOWNLOAD_ACTIONS and root is not None:
-                said = await to_thread.run_sync(_move_new_documents, meta, account, root,
-                                                started, env)
+                said = await to_thread.run_sync(_move_new_documents, meta, account, saved, env)
                 for told in said:
                     yield _event(told)
             if result is not None:
                 yield _event(json.dumps(result), "result")
             # The files this run saved, by name, for the page to list under
             # its one-line outcome. The log below keeps them for the home page.
-            yield _event(json.dumps(_saved_this_run(root, started) if root else []), "saved")
+            yield _event(json.dumps(saved), "saved")
             # Marked first. The note's thread finishes even when the page
             # goes meanwhile, so marking it after would note the run twice.
             noted = True
@@ -4369,17 +4377,16 @@ def _documents_left(meta: dict, account: str) -> int:
     return len(seen)
 
 
-def _move_new_documents(meta: dict, account: str, root: Path, started: float,
-                        env: dict) -> list:
+def _move_new_documents(meta: dict, account: str, saved: list, env: dict) -> list:
     """Once a download run has ended, move what it saved and checked into the
     account's documents folder, through the app's own Rename told to move
     the documents its run listed in new-this-run.txt alone (#102). Nothing
     for an account with no documents folder, or a run that listed nothing
-    since it started. The lines to show beneath the run's own."""
+    since it started (`saved`, the list the page shows). The lines to show
+    beneath the run's own."""
     if not _documents_of(meta, account):
         return []
-    # What the run listed since it started, the same list the page shows.
-    if not _saved_this_run(root, started):
+    if not saved:
         return []
     cmd = _command(meta, account, ["--rename", "--apply"])
     mark = run_result.new_mark()

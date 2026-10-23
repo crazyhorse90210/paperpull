@@ -43,6 +43,17 @@ here = Path(__file__).resolve().parent
 with open(here / "argv.jsonl", "a", encoding="utf-8") as f:
     print(json.dumps(sys.argv[1:]), file=f)
 plan = json.loads((here / "plan.json").read_text(encoding="utf-8")) if (here / "plan.json").exists() else {}
+mark = os.environ.get("PAPERPULL_RUN_MARK", "")
+if "--rename" in sys.argv:
+    # The move after a download run (#102), the app's own Rename. Until #103
+    # every app's Rename wrote a run summary of its own, which left
+    # new-this-run.txt listing nothing.
+    if plan.get("rename_lists_nothing"):
+        (here / "new-this-run.txt").write_text(
+            "# 0 file(s) downloaded on this run:\n\n", encoding="utf-8")
+    print("PAPERPULL_RUN_RESULT " + (mark + " " if mark else "") + json.dumps(
+        {"manual_review": 0, "failed": 0, "validation_failures": 0, "new_files": 0}), flush=True)
+    sys.exit(0)
 print("Checking the connection to your signed-in browser...", flush=True)
 if plan.get("wait") in sys.argv:
     for _ in range(400):
@@ -56,7 +67,6 @@ if saved:
         encoding="utf-8")
 counts = {"manual_review": 0, "failed": 0, "validation_failures": 0,
           "new_files": len(saved), "stopped": plan.get("stopped", 0)}
-mark = os.environ.get("PAPERPULL_RUN_MARK", "")
 print("PAPERPULL_RUN_RESULT " + (mark + " " if mark else "") + json.dumps(counts), flush=True)
 sys.exit(plan.get("code", 0))
 '''
@@ -220,13 +230,13 @@ def panel():
         chromium.close()
 
 
-def _alike_run():
+def _alike_run(new_files=1):
     """A run as the panel logs it, from a result line that counted two
     documents of one type on one date and nothing else."""
     mark = run_result.new_mark()
     said = run_result.PREFIX + mark + " " + json.dumps({"manual_review": 0, "failed": 0,
                                                         "validation_failures": 0,
-                                                        "new_files": 1, "alike": 2})
+                                                        "new_files": new_files, "alike": 2})
     return {"action": "all", "exit_code": 0, "result": run_result.parse(said, mark)}
 
 
@@ -248,19 +258,65 @@ def test_documents_left_alike_leave_the_row_as_it_would_be_without_them(panel, r
     assert shown["chip"]["text"] == chip and shown["act"]["label"] == "Get new"
 
 
-@pytest.mark.parametrize("saved, title, said", [
-    (["2026-09-30 Bank Statement.pdf"], "1 new document saved", "Finished. 2 documents"),
-    ([], "Nothing new", "Everything else Bank lists in these dates is already saved. 2 documents")])
-def test_a_run_that_counted_documents_alike_names_them_and_finishes_clean(panel, saved, title, said):
+@pytest.mark.parametrize("saved, new_files, title, said", [
+    (["2026-09-30 Bank Statement.pdf"], 1, "1 new document saved", "Finished. 2 documents"),
+    ([], 0, "Nothing new", "Everything else Bank lists in these dates is already saved. 2 documents")])
+def test_a_run_that_counted_documents_alike_names_them_and_finishes_clean(panel, saved, new_files,
+                                                                          title, said):
     o = panel.evaluate("""([result, saved]) => {
         Object.assign(RUN, {result, code: '0', action: 'all', again: false, refused: '', saved,
                             provider: 'Bank', kind: 'DOCUMENT', lines: []});
         return runOutcome();
-    }""", [_alike_run()["result"], saved])
+    }""", [_alike_run(new_files)["result"], saved])
     assert (o["tone"], o["title"]) == ("ok", title) and not o.get("attention")
     assert said in o["say"]
     assert ("that share a type and a date with another could not be told apart and were left "
             "unsaved. Take any you need from Bank's own page.") in o["say"]
+
+
+def _counted(**counts):
+    """A run's own result, as the panel reads it from the run's marked line."""
+    mark = run_result.new_mark()
+    said = run_result.PREFIX + mark + " " + json.dumps(dict(
+        {"manual_review": 0, "failed": 0, "validation_failures": 0, "new_files": 0}, **counts))
+    return run_result.parse(said, mark)
+
+
+def _outcome(panel, result, saved, action="all"):
+    return panel.evaluate("""([result, saved, action]) => {
+        Object.assign(RUN, {result, code: '0', action, again: false, refused: '', saved,
+                            provider: 'Citi', kind: 'DOCUMENT', lines: []});
+        return runOutcome();
+    }""", [result, saved, action])
+
+
+@pytest.mark.parametrize("action", ["pilot", "all", "resume"])
+@pytest.mark.parametrize("saved", [[], ["2020-10-31 Citi Statement.pdf"]])
+def test_a_run_that_saved_documents_never_says_nothing_new(panel, action, saved):
+    """The count is the run's own, from its result. The names come from its
+    new-this-run.txt, which can name fewer (two files of one name are one
+    name there) or none, as when a step after the run had replaced it, which
+    made a Citi run that saved 23 requested statements say Nothing new (#103).
+    The home page's line for the run counts the same way."""
+    o = _outcome(panel, _counted(new_files=23), saved, action)
+    assert (o["tone"], o["title"]) == ("ok", "23 new documents saved")
+    entry = {"action": action, "exit_code": 0, "result": _counted(new_files=23), "saved": saved}
+    assert ", 23 new files</span>" in panel.evaluate("(e) => runLine(e)", entry)
+    o = _outcome(panel, _counted(new_files=23, failed=1), saved, action)
+    assert o["title"] == "23 new documents saved, some need a look"
+
+
+def test_a_run_that_saved_nothing_still_says_so(panel):
+    o = _outcome(panel, _counted(), [])
+    assert (o["tone"], o["title"]) == ("ok", "Nothing new")
+    assert _outcome(panel, _counted(failed=1), [])["title"] == "Finished, needs attention"
+    # A log in the run's folder can hold anything, and an odd count in it
+    # is no count.
+    for odd in ("23", -1, 2.5, None, [3]):
+        entry = {"action": "all", "exit_code": 0, "result": {"new_files": odd}, "saved": []}
+        assert ", nothing new</span>" in panel.evaluate("(e) => runLine(e)", entry), odd
+    entry = {"action": "all", "exit_code": 0, "result": {}, "saved": ["a.pdf", "b.pdf"]}
+    assert ", 2 new files</span>" in panel.evaluate("(e) => runLine(e)", entry)
 
 
 def test_a_broken_log_is_no_log(root):
@@ -376,6 +432,28 @@ def test_a_run_says_what_it_saved_and_logs_it(base, root):
     assert entry["started"] <= entry["ended"]
     row = _rows()[("Bank Statements", "primary")]
     assert row["last_run"] == entry and row["last_outcome"] == "" and row["running"] is None
+
+
+def test_a_run_moved_to_its_documents_folder_still_says_what_it_saved(base, root):
+    """appchamp's Citi run saved 23 requested statements and its page said
+    Nothing new (#103). His account had a documents folder, so the panel
+    moved what the run saved there with the app's own Rename, which wrote
+    an empty new-this-run.txt, and the panel read the list after that. It
+    is read as the run ends now, before anything else runs."""
+    bank = root / "Bank Statements"
+    (bank / "config.json").write_text(json.dumps({
+        "output_dir": ".", "documents_dir": str(root.parent / "Watched" / "Bank Statements")}),
+        encoding="utf-8")
+    names = ["2020-10-31 Bank Statement.pdf", "2020-12-31 Bank Statement.pdf"]
+    _plan(bank, saved=["Statements/" + n for n in names], rename_lists_nothing=True)
+    out = run(base, {"app": "Bank Statements", "action": "all"})
+    assert events(out, "done") == ["0"]
+    starts = [json.loads(line) for line in (bank / "argv.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert starts == [["--all", "--yes"], ["--rename", "--apply"]]
+    assert "0 file(s)" in (bank / "new-this-run.txt").read_text(encoding="utf-8")
+    assert [json.loads(s) for s in events(out, "saved")] == [names]
+    assert [json.loads(s)["new_files"] for s in events(out, "result")] == [2]
+    assert app_module._read_run_log(bank)[0]["saved"] == names
 
 
 def test_an_old_list_of_new_files_is_never_this_runs(base, root):
