@@ -234,6 +234,20 @@ def test_the_page_offers_them_on_the_server_and_a_folder_on_the_desktop():
     assert "'/api/diagnostics/download?'" in script and "'/api/aside/download?'" in script
 
 
+def test_the_page_never_goes_to_a_download_of_its_own_api():
+    """Each download is asked for first (fetchDownload), so a refusal is
+    said in the panel. Sent to the address, a refused spreadsheet Download
+    replaced the panel with the refusal's JSON and dropped a run streaming
+    on that page (the release review of 0.57.1)."""
+    import re
+    script = (REPO / "gui" / "static" / "app.js").read_text(encoding="utf-8")
+    went = re.findall(r"(?:location(?:\.href)?\s*=|location\.(?:assign|replace)\(|window\.open\()"
+                      r"\s*['\"`]/api/", script)
+    assert went == [], went
+    assert "await fetchDownload('/api/export/download')" in script
+    assert "await fetchDownload('/api/failure/download?'" in script
+
+
 # -- what the review of the first version found -----------------------------------
 
 def test_a_manual_review_folder_that_is_a_link_holds_nothing(shop, tmp_path):

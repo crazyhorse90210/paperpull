@@ -27,7 +27,7 @@ from paperpull_core import saved_copy
 from paperpull_core import tabs
 from paperpull_core.journal import Journal
 from paperpull_core.api_census import Requests
-from paperpull_core.run_reporting import report_run_result
+from paperpull_core.run_reporting import NEW_LIST_NOTE, lists_what_it_saved, report_run_result
 
 import argparse
 import logging
@@ -911,13 +911,17 @@ class App:
         # A plain list of exactly the files downloaded THIS run (all new,
         # since already-downloaded documents are skipped). Handy for knowing
         # what to import into paperless-ngx, and safe to ignore/delete.
-        atomic_write_text(
-            self.paths.root / "new-this-run.txt",
-            f"# {len(new_files)} file(s) downloaded on this run "
-            f"({s['ended']}):\n" + "\n".join(sorted(new_files)) + "\n")
-        if new_files:
-            print(f"\n{len(new_files)} NEW file(s) downloaded this run "
-                  f"(listed in new-this-run.txt).")
+        # Not for Verify or a dry run, which save nothing and leave the
+        # list as the last download run wrote it (lists_what_it_saved).
+        if lists_what_it_saved(s, self.args):
+            atomic_write_text(
+                self.paths.root / "new-this-run.txt",
+                f"# {len(new_files)} file(s) downloaded on this run "
+                f"({s['ended']}):\n" + NEW_LIST_NOTE
+                + "\n".join(sorted(new_files)) + "\n")
+            if new_files:
+                print(f"\n{len(new_files)} NEW file(s) downloaded this run "
+                      f"(listed in new-this-run.txt).")
         report_run_result(s)
 
 

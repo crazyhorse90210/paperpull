@@ -162,23 +162,36 @@ def _not_on_one_line(cfg, path) -> str:
     they are refused here once, rather than escaped at every print."""
     where = Path(path).absolute()
     if not on_one_line(where):
-        return "The config file's path, %s, holds a line break or another control character" \
-            % one_line(where)
+        return "The config file's path, %s, %s" % (one_line(where), _held(where))
     if not isinstance(cfg, dict):
         return ""
     name = one_line(where.name)
     for key in _NAMED_SETTINGS:
         value = cfg.get(key)
         if isinstance(value, str) and not on_one_line(value):
-            return "%s in %s, %s, holds a line break or another control character" \
-                % (key, name, one_line(value))
+            return "%s in %s, %s, %s" % (key, name, one_line(value), _held(value))
     labels = cfg.get("account_labels")
     if isinstance(labels, dict):
         for key, value in labels.items():
             if not (on_one_line(key) and (not isinstance(value, str) or on_one_line(value))):
-                return "account_labels in %s holds a line break or another control " \
-                       "character, in %s" % (name, one_line("%s: %s" % (key, value)))
+                said = "%s: %s" % (key, value)
+                return "account_labels in %s %s, in %s" % (name, _held(said), one_line(said))
     return ""
+
+
+def _held(text) -> str:
+    """What keeps text off one line, for _not_on_one_line to say. A name on
+    Linux that is not UTF-8 is read with half of a character for each byte
+    UTF-8 does not take, and a run can neither print such a name under the
+    control panel, which runs it with PYTHONIOENCODING=utf-8, nor keep it
+    in its records, where progress.json and the index CSV make each half
+    whole as U+FFFD and so name a file that is not there. So it is refused
+    too, and said for what it is."""
+    text = str(text)
+    if on_one_line("".join(c for c in text if not 0xD800 <= ord(c) <= 0xDFFF)):
+        return ("holds a name that is not UTF-8 text, which a run can neither print nor keep "
+                "in its records")
+    return "holds a line break or another control character"
 
 
 def _in_a_kept_folder(docs: str, out: str) -> bool:

@@ -41,6 +41,54 @@ All notable changes to PaperPull are recorded here. Versioning follows
   Found by reading the code and proven in a browser before the change.
   Both apps are still untested, so no archive is known to hold a misfiled
   document.
+- **A folder of one person's own can no longer hold the folder for every
+  provider.** The documents folder page refused a person's own folder that
+  was the folder for every provider or inside another person's folder in
+  it, but not one around it, so a spouse's own `D:\Docs` with
+  `D:\Docs\PaperPull` for every provider put everyone's documents inside
+  the spouse's folder. That is refused now whichever is saved first, so to
+  use such a folder for every provider, choose another folder for that
+  person first. A run gives a person added since no folder inside such a
+  folder, and the page says so rather than promise one. Where an earlier
+  version already saved the folder for every provider inside a person's
+  own, **Use it for every provider** gives that person a folder inside it
+  too.
+- **Move documents goes where the page says.** The panel filled in a
+  person's folder in the folder for every provider before any action, a
+  Move and its preview included. So an account with no documents folder
+  setting, one set back to its provider's own folder before 0.57.0 for
+  instance, was told Move brings its documents back to its own folder and
+  had them moved into the folder for every provider. The folder is now
+  filled in only before a download run, Pilot, Run All or Resume, and the
+  page says it comes with their next download.
+- **Two changes to one config at once no longer undo each other or its
+  copy in Backups.** A run filling in its documents folder in one tab and a
+  save in another could each read the config before the other wrote it, so
+  one change was lost, and they could take one Backups folder, so the copy
+  of the config as it was could be written over, or deleted along with that
+  folder when one of the two writes failed. Every write of a provider's or
+  person's config in the panel now waits for the one before it, adding a
+  person, an import and the settings an update adds included, and a run
+  fills in a documents folder only if nobody chose one meanwhile.
+- **A config in a folder whose name is not UTF-8 is refused for what it
+  is.** On Linux such a name reaches PaperPull as half characters, and a
+  run can neither print it under the control panel nor keep it in its
+  records, where it would name a file that is not there. A run still
+  stops before doing anything, and now says the name is not UTF-8 text
+  rather than that it holds a line break.
+- **PaperPull Server's spreadsheet and failure file Downloads say a
+  refusal in the panel.** Each sent the page to the file's address, so a
+  refused download, a spreadsheet swapped for a link among them, replaced
+  the panel with the refusal's text and dropped a run streaming on it.
+  Each is now asked for first, and a refusal is said at the top of the
+  panel.
+- **Verify and a dry run leave `new-this-run.txt` as the last download run
+  wrote it.** Each saves nothing, yet replaced the list with an empty one,
+  as Discover and Rename no longer do. Each still writes its run summary.
+  The list's second line now says each file is named as the run saved it,
+  so a Rename or the move to a documents folder since may have given it
+  another name or folder, or its name to another file when two traded
+  names, and the README says so for Rename too.
 
 ## [0.57.1] - 2026-10-22
 

@@ -7,7 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 from paperpull_core import pressing, storage
-from paperpull_core.run_reporting import report_run_result, PREFIX
+from paperpull_core.run_reporting import (NEW_LIST_NOTE, PREFIX, lists_what_it_saved,
+                                          report_run_result)
 from paperpull_core.storage import atomic_write_text, now_iso
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -23,12 +24,14 @@ def test_each_provider_reports_current_run_counts(entry, tmp_path, capsys):
     method = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
                   and n.name == "write_run_summary")
     scope = {"atomic_write_text": atomic_write_text, "now_iso": now_iso,
-             "report_run_result": report_run_result}
+             "report_run_result": report_run_result,
+             "lists_what_it_saved": lists_what_it_saved, "NEW_LIST_NOTE": NEW_LIST_NOTE}
     exec(compile(ast.Module(body=[method], type_ignores=[]), str(entry), "exec"), scope)
     stats = defaultdict(int, started="2026-01-01T00:00:00", mode="all", dates=[], dates_processed=[],
                         new_files=["Statements/synthetic.pdf"], manual_review=2)
-    app = SimpleNamespace(stats=stats, paths=SimpleNamespace(root=tmp_path,
-                          run_summary=tmp_path / "run-summary.txt"))
+    app = SimpleNamespace(stats=stats, args=SimpleNamespace(dry_run=False),
+                          paths=SimpleNamespace(root=tmp_path,
+                                                run_summary=tmp_path / "run-summary.txt"))
     scope["write_run_summary"](app)
     assert "Statements/synthetic.pdf" in (tmp_path / "new-this-run.txt").read_text()
     stats.update(new_files=[], manual_review=0)

@@ -221,7 +221,9 @@ Three plain-text files carry the state, and you can read all of them:
 That last step is what makes a re-run safe. `downloaded_ok` is keyed to the
 document, not to the file on disk, so you can import everything into
 paperless-ngx, delete the PDFs, and the next run still skips them. It only
-fetches what is genuinely new, and lists it in `new-this-run.txt`. To fetch
+fetches what is genuinely new, and lists it in `new-this-run.txt`, which
+Discover, Verify, Rename and a dry run leave as the last download run wrote
+it. To fetch
 them again anyway, open the provider in the control panel, choose
 **Restore deleted files** under More and pick a year, or both a From and a
 To date, or add `--redownload` to a run from a terminal. Nothing is
@@ -526,7 +528,11 @@ single app can have its own. After you save, the page offers to rename
 the files you already have to match, a preview first and then the
 rename, and nothing is downloaded again. Renaming moves files into the
 folders a pattern names, and back out again if you change your mind. The
-pattern language is in [docs/file-naming.md](docs/file-naming.md).
+last run's `new-this-run.txt` is left as that run wrote it, so it names
+each file as the run saved it, before the rename. A line can then name a
+file that has another name now, or, when two files traded names, the
+other file, and the list's second line says so. The pattern language is
+in [docs/file-naming.md](docs/file-naming.md).
 
 ## A documents folder, for every provider or each person
 
@@ -568,8 +574,8 @@ the same Move brings the documents to where it now points. A browser
 profile, a folder inside or around one, a folder holding a provider's own
 folder and a folder inside or around a person's own folder are refused. A
 provider or person added later gets their folder inside the folder for
-every provider as their first run from the panel starts, and the run says
-so. One whose config already names a documents folder, their own folder
+every provider as their first download run from the panel starts, and the
+run says so. One whose config already names a documents folder, their own folder
 included, is never changed by a run. The panel writes each one's folder
 into their config.json as `"documents_dir"`, a full path, so a run from a
 terminal uses it too, and from a terminal the move is a Rename run with

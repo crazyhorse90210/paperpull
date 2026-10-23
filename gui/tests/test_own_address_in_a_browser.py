@@ -232,6 +232,68 @@ def test_on_the_server_the_page_still_hands_over_its_spreadsheet_and_failure_fil
         context.close()
 
 
+def test_on_the_server_a_download_refused_is_said_on_the_panel_it_was_asked_from(
+        browser, port, shop, tmp_path, monkeypatch):
+    """A spreadsheet that is no longer the one the export wrote, here a file
+    outside the folder it writes into, and a failure file that is not there.
+    The page stays the panel and says why, where the refusal's JSON used to
+    replace it (the release review of 0.57.1)."""
+    monkeypatch.setenv("PAPERPULL_SERVER", "1")
+    server_mode.set_password(PASSWORD)
+    elsewhere = tmp_path / "Elsewhere" / "All Purchases.xlsx"
+    elsewhere.parent.mkdir()
+    elsewhere.write_bytes(b"not the export")
+    monkeypatch.setattr(app_module, "_LAST_EXPORT", elsewhere)
+    base = "http://127.0.0.1:%d" % port
+    context = signed_in_context(browser, base, accept_downloads=True)
+    try:
+        tab = context.new_page()
+        tab.goto(base + "/")
+        tab.wait_for_selector("#view-home .acct")
+        handed = []
+        tab.on("download", lambda download: handed.append(download))
+        tab.evaluate("revealSpreadsheet()")
+        assert tab.url == base + "/" and tab.title() == "PaperPull"
+        assert "Export it again" in tab.inner_text("#noticetext")
+        tab.evaluate("failureApp = 'Shop Receipts'")
+        tab.evaluate("revealFailure()")
+        assert tab.url == base + "/" and tab.title() == "PaperPull"
+        assert "no recent failure file" in tab.inner_text("#noticetext")
+        assert handed == []
+    finally:
+        context.close()
+
+
+def test_the_documents_folder_page_says_when_a_run_will_refuse_their_folder(
+        browser, port, shop, tmp_path):
+    """The folder for every provider, saved by an earlier version inside a
+    folder of the spouse's own. The page used to promise the person with no
+    setting their folder in it from their next download, which that run
+    refuses (the fresh review of minors-0571)."""
+    own = tmp_path / "Docs"
+    (shop.parent / "Shop Receipts - spouse").mkdir()
+    (shop / "config.spouse.json").write_text(json.dumps({
+        "output_dir": "../Shop Receipts - spouse", "documents_dir": str(own)}), encoding="utf-8")
+    settings = app_module._read_settings()
+    settings["documents_root"] = str(own / "PaperPull")
+    app_module._write_settings(settings)
+    base = "http://127.0.0.1:%d" % port
+    context = browser.new_context()
+    try:
+        tab = context.new_page()
+        tab.goto(base + "/")
+        tab.wait_for_selector("#view-home .acct")
+        tab.evaluate("openDocuments()")
+        tab.evaluate("async () => { $('dcpick').value = 'Shop Receipts\\nprimary'; await dcLoad(); }")
+        said = tab.text_content("#dcnow")
+        assert "will not use" in said and "Shop Receipts, spouse" in said, said
+        assert "from their next download" not in said, said
+        tab.evaluate("async () => { $('dcpick').value = 'Shop Receipts\\nspouse'; await dcLoad(); }")
+        assert "Set for them alone" in tab.text_content("#dcnow")
+    finally:
+        context.close()
+
+
 def test_on_the_server_its_own_forms_still_set_the_password_and_sign_in_and_out(
         browser, port, shop, monkeypatch):
     """Each is a form a page of the server's posts, which the browser marks
