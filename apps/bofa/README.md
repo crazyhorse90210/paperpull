@@ -37,12 +37,13 @@ someone who banks there.
    as how far back the statements go or whether a card's statements sit
    apart from checking's.
 
-**If a run stops early, send the file it wrote.** Every failed run leaves a
-`failure-*.json` in the `Diagnostics` folder and prints where it put it. It
-says which step broke and what the page looked like at the time, as counts
-and states, with no text from your account in it. Attach it to the issue
-the same way. A Discover or Pilot that says this app is not built yet is
-not a failure and writes none.
+**If a run stops early, send the file it wrote.** Once this app is built,
+a run that fails leaves a `failure-*.json` in the `Diagnostics` folder and
+prints where it put it. It says which step broke and what the page looked
+like at the time, as counts and states, with no text from your account in
+it. Attach it to the issue the same way. This first build stops before it
+reads anything, so a Discover or Pilot that says it is not built yet
+writes none.
 
 ## Sign-in
 

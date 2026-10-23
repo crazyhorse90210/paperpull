@@ -99,11 +99,12 @@ class Document:
     def key(self) -> str:
         """Category, date, title and account. A bank sign-in holds checking,
         savings and cards, whose statements can share a day, so the account
-        is what tells one from another. Which id, if any, a statement carries
-        waits on the recording, so none is keyed on yet."""
+        is what tells one from another. Which id, if any, a statement
+        carries, and how two of one account and one day are told apart,
+        wait on the recording, so neither is keyed on yet. Nothing is listed
+        in this first build, so no key has been written."""
         acct = _account_component(sanitize_component(self.account or ""))
-        base = f"{self.category}:{self.date}:{sanitize_component(self.title)[:60]}:{acct}"
-        return base if not self.occurrence else f"{base}#{self.occurrence}"
+        return f"{self.category}:{self.date}:{sanitize_component(self.title)[:60]}:{acct}"
 
     def to_dict(self) -> dict:
         return dict(self.__dict__)
@@ -580,10 +581,11 @@ class App:
 
     def cmd_resume(self):
         self.stats["mode"] = "resume"
-        # Resume reads no list of its own, and no list has ever been read,
-        # so it says this first build is not built yet rather than that
-        # nothing is left (paperpull_core.listing).
-        self.not_built(site.NotBuilt("the list of statements"))
+        # Resume reads no list of its own. This first build never lists, so
+        # with nothing listed it says so and stops as a run that stopped,
+        # and Pilot then says it is not built yet (paperpull_core.listing).
+        docs = [d for d in self._select() if not self._already_done(d)]
+        listing.resume(self, docs, lambda left: self.process(left, dry_run=self.args.dry_run))
 
     def cmd_rename(self):
         """Rename what is already downloaded, without downloading it again.
@@ -692,7 +694,11 @@ class App:
         page = self.page()
         info = {"timestamp": now_iso()}
         try:
+            info["on_site"] = site.is_safe_url(page.url or "")
             info["signed_out"] = site.looks_signed_out(page)
+            # The account holder's name is never written, even where its
+            # parts are ordinary words on the fixed list.
+            site.set_private_words([self.config.get("owner", "")])
             info["challenge"] = site.detect_security_challenge(page)
             info["mapped"] = not getattr(site, "NOT_MAPPED", "")
             # The page the person left open, read and nothing else. Nothing

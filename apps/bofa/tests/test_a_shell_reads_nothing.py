@@ -131,8 +131,13 @@ def test_a_run_says_it_is_not_built_and_stops(command, tmp_path, capsys, no_brow
     assert stop.value.code == 0
     out = capsys.readouterr().out
     said = " ".join(out.split())
-    assert "Bank of America is not built yet" in said
-    assert "press Record" in said and "issue #121" in said
+    if command == "--resume":
+        # Resume reads no list, and none was ever read, which the core says
+        # in its own words, pointing at Pilot.
+        assert "have been listed yet" in said and "Pilot" in said
+    else:
+        assert "Bank of America is not built yet" in said
+        assert "press Record" in said and "issue #121" in said
     result = [line for line in out.splitlines() if line.startswith(PREFIX)]
     assert result, out
     payload = result[-1][len(PREFIX):]
@@ -237,6 +242,34 @@ def test_a_password_field_or_an_unreadable_page_is_signed_out():
             raise RuntimeError("gone")
     assert site.looks_signed_out(Broken("https://secure.bankofamerica.com/a"))
     assert site.looks_signed_out(Page(""))
+
+
+def test_the_sign_in_address_is_signed_out_and_a_signin_path_is_not():
+    """The one address taken for a sign-in page, and a path with "signin"
+    in it, which a signed-in overview may have, left alone."""
+    assert site.looks_signed_out(Page(
+        "https://secure.bankofamerica.com/login/sign-in/signOnV2Screen.go"))
+    assert not site.looks_signed_out(Page(
+        "https://secure.bankofamerica.com/myaccounts/signin/signIn.go"))
+
+
+def test_diagnose_never_writes_the_account_holders_name(tmp_path, capsys, monkeypatch):
+    """"Bill" is an ordinary word on the fixed list, so only the owner's
+    name being private keeps it out."""
+    cfg = _config(tmp_path)
+    data = json.loads(cfg.read_text(encoding="utf-8"))
+    data["owner"] = "Bill Grant"
+    cfg.write_text(json.dumps(data), encoding="utf-8")
+    args = app_mod.build_parser().parse_args(["--diagnose", "--config", str(cfg)])
+    app = app_mod.App(args)
+    page = Page("https://secure.bankofamerica.com/a", title="Bill Grant - Accounts Overview")
+    monkeypatch.setattr(app_mod.App, "page", lambda self: page)
+    monkeypatch.setattr(site, "survey", lambda p, dwell_ms=0: {"pages": [site._page_summary(p)]})
+    app.cmd_diagnose()
+    written = (tmp_path / "out" / "Diagnostics" / "diagnose-documents.json").read_text(encoding="utf-8")
+    assert "Bill" not in written and "Grant" not in written
+    assert json.loads(written)["on_site"] is True
+    assert not [a for a in page.asked if a[0] in PRESSES or a[0] == "goto"], page.asked
 
 
 def test_the_survey_reads_the_open_page_and_does_nothing_on_it():

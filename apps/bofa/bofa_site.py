@@ -62,7 +62,8 @@ NOT_BUILT = (
     "(under more) and click your way to one statement the way you always "
     "do, then Stop recording. The recording.json it writes in this "
     "provider's Diagnostics folder is what the real app is built from. "
-    "Read it through, then attach it to issue #121 on GitHub.")
+    "Read it through, then attach it to issue #121 on GitHub. Every run "
+    "but Login, Record and Diagnose stops until it is built.")
 
 
 class NotBuilt(RuntimeError):
@@ -96,8 +97,16 @@ FORBIDDEN_CONTROL_RE = re.compile(
     r"\bdeposit|withdraw|send\s+money|request\s+money|move\s+money|\bsend\b|"
     r"cash\s+advance|balance\s+transfer|\bredeem|\brewards?\b|\bdeals?\b|"
     r"keep\s+the\s+change|\boffers?\b|"
-    r"\bapply\b|open\s+(an?\s+)?(new\s+)?account|close\s+(my\s+|an?\s+|this\s+)?account|"
-    r"stop\s+(an?\s+)?(check|payment)|\border\b|\brequest|"
+    # Opening an account or a card, never its statements.
+    r"\bapply\b|open\s+(a|an|another|new|my)\b[\w\s]{0,24}\b(accounts?|cards?|cds?|ira)\b"
+    r"(?!\s+(statements?|documents?))|"
+    r"open\s+\w{0,12}\s*(accounts?|cards?)\b(?!\s+(statements?|documents?))|"
+    r"\bopen\s+(now|merrill)\b|"
+    r"get\s+(a\s+|an\s+|the\s+|your\s+)?(new\s+)?(card|account|loan|quote)\b|"
+    r"close\s+(my\s+|an?\s+|this\s+)?account|"
+    # A paper copy of a statement can carry a fee at a bank, so ordering,
+    # requesting or getting a copy is never pressed.
+    r"\bstop\b|\border\b|\brequest|\bcop(y|ies)\b|\bpaper\b|"
     r"\bloan\b|\bborrow|refinanc|"
     # Word boundaries on both sides of every stem. A card is a document
     # here, so "Credit card statement" must pass, and "edit" sits inside
@@ -121,6 +130,7 @@ FORBIDDEN_CONTROL_RE = re.compile(
 SAFE_DOC_CONTROL_RE = re.compile(
     r"(download|\bview\b|\bopen\b|\bprint\b|\bpdf\b|statements?\b|documents?\b|"
     r"\bletters?\b|\bnotices?\b|1099|1098|5498|tax\s+(forms?|documents?|statements?)|"
+    r"\bsummar(y|ies)\b|year.?end|"
     r"\bhistory\b|see\s+(more|all|older)|show\s+(more|all|older))", re.I)
 
 
@@ -142,22 +152,28 @@ SECURITY_CHALLENGE_MARKERS = [
     "your session has expired", "session timed out", "you have been logged off",
 ]
 
+# Lowercased address fragments of a sign-in page. One only, the path the
+# sign-in form has been on, not checked against an account yet. "/signin"
+# is left out on purpose, since a signed-in overview may sit under a path
+# like /myaccounts/signin/, and calling that signed out would refuse Record
+# on the very page a person lands on. The password field below notices any
+# sign-in form this misses.
+LOGIN_URL_MARKERS = ["/login/sign-in/"]
+
 RATE_LIMIT_MARKERS = ["too many requests", "rate limit", "try again later",
                       "temporarily unavailable", "unusual traffic", "http error 429"]
 
 
 def looks_signed_out(page) -> bool:
-    """True where the page shows a sign-in form, a password field, or where
-    it cannot say where it is. Which of Bank of America's addresses are
-    sign-in pages is not known yet, and an address guessed wrong would
-    refuse Record on the very page a person lands on once signed in, so no
-    address is taken for one."""
+    """True where the page is the sign-in page by its address, shows a
+    password field, or cannot say where it is."""
     try:
-        if not (page.url or ""):
-            return True
+        url = (page.url or "").lower()
     except Exception:
         # A page that cannot say where it is is treated as signed out, the
         # safe answer.
+        return True
+    if not url or any(m in url for m in LOGIN_URL_MARKERS):
         return True
     try:
         if page.locator("input[type='password']").count() > 0:

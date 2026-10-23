@@ -47,6 +47,11 @@ def test_bank_titles_classify(title, category, summary):
     "Update contact info", "Edit nickname", "Ask Erica", "Chat with us",
     "Dispute a transaction", "Log Out", "Sign out", "Buy", "Sell",
     "Download | Make a payment",
+    # What the review of the first shell found the guard let through.
+    "Open a savings account", "Open a new savings account", "Open a credit card",
+    "Open a CD", "Open now", "Open a Merrill Edge account", "Open Merrill",
+    "Open account", "Get a new card", "Stop paper statements", "Statement copies",
+    "Get a copy of your statement", "Order statement copies",
 ])
 def test_moving_money_and_changing_the_account_are_never_safe(name):
     assert not site.is_safe_control(name), name
@@ -55,7 +60,8 @@ def test_moving_money_and_changing_the_account_are_never_safe(name):
 @pytest.mark.parametrize("name", [
     "Download", "Download PDF", "View statement", "Statements & Documents",
     "Credit card statement", "Download statement", "1099-INT", "Tax documents",
-    "View PDF", "See older statements",
+    "View PDF", "See older statements", "Year-End Summary", "Annual summary",
+    "Open credit card statement", "Open account documents",
 ])
 def test_reading_a_document_is_safe(name):
     assert site.is_safe_control(name), name
