@@ -860,7 +860,7 @@ async function fetchDownload(url) {
 async function revealFailure() {
   if (!failureApp) return;
   if (SERVER) {
-    location.href = '/api/failure/download?' + new URLSearchParams({app: failureApp, account: failureAccount}).toString();
+    await fetchDownload('/api/failure/download?' + new URLSearchParams({app: failureApp, account: failureAccount}).toString());
     return;
   }
   try {
@@ -1587,8 +1587,10 @@ async function buildSpreadsheet() {
 }
 async function revealSpreadsheet() {
   // A server cannot open a folder on the computer the page is on, so it
-  // hands the spreadsheet to the browser instead.
-  if (SERVER) { location.href = '/api/export/download'; return; }
+  // hands the spreadsheet to the browser instead. Asked first, so a refusal,
+  // a spreadsheet swapped for a link among them, is said in the panel and a
+  // run streaming on this page goes on.
+  if (SERVER) { await fetchDownload('/api/export/download'); return; }
   try { await fetch('/api/export/reveal', {method: 'POST'}); } catch (e) { /* the file is still there */ }
 }
 
@@ -1921,9 +1923,9 @@ async function dcLoad() {
   $('dcnow').textContent = d.documents_dir
     ? (d.follows ? 'From the folder for every provider, documents' : 'Set for them alone, documents') +
       ' go to ' + d.documents_dir + '. Records stay in ' + d.output_dir + '.'
-    // One added since the folder was saved gets it as its next run starts.
+    // One added since the folder was saved gets it as its next download starts.
     : d.follows && d.in_root ? 'From the folder for every provider, documents go to ' + d.in_root +
-      ' from their next run. Records stay in ' + d.output_dir + '.'
+      ' from their next download. Records stay in ' + d.output_dir + '.'
     : 'Documents and records both go to ' + d.output_dir + '.';
   if (document.activeElement !== $('dcinput')) $('dcinput').value = d.documents_dir || '';
   const isUnix = SERVER || Boolean(META.apps_root && META.apps_root.startsWith('/'));
@@ -1966,7 +1968,7 @@ async function drSave(how) {
   let msg = 'Saved. ' + (own.length
     ? many(d.following, 'provider and person follows', 'providers and people follow') + ' it now, and ' +
       many(own.length, 'keeps', 'keep') + ' a folder of their own, listed below.'
-    : !d.following ? 'Each provider and person gets their folder inside it as their first run starts.'
+    : !d.following ? 'Each provider and person gets their folder inside it as their first download starts.'
     : d.following === 1 ? 'The one provider and person follows it now.'
     : 'All ' + d.following + ' providers and people follow it now.');
   if (applyAll && d.configs) {

@@ -232,6 +232,38 @@ def test_on_the_server_the_page_still_hands_over_its_spreadsheet_and_failure_fil
         context.close()
 
 
+def test_on_the_server_a_download_refused_is_said_on_the_panel_it_was_asked_from(
+        browser, port, shop, tmp_path, monkeypatch):
+    """A spreadsheet that is no longer the one the export wrote, here a file
+    outside the folder it writes into, and a failure file that is not there.
+    The page stays the panel and says why, where the refusal's JSON used to
+    replace it (the release review of 0.57.1)."""
+    monkeypatch.setenv("PAPERPULL_SERVER", "1")
+    server_mode.set_password(PASSWORD)
+    elsewhere = tmp_path / "Elsewhere" / "All Purchases.xlsx"
+    elsewhere.parent.mkdir()
+    elsewhere.write_bytes(b"not the export")
+    monkeypatch.setattr(app_module, "_LAST_EXPORT", elsewhere)
+    base = "http://127.0.0.1:%d" % port
+    context = signed_in_context(browser, base, accept_downloads=True)
+    try:
+        tab = context.new_page()
+        tab.goto(base + "/")
+        tab.wait_for_selector("#view-home .acct")
+        handed = []
+        tab.on("download", lambda download: handed.append(download))
+        tab.evaluate("revealSpreadsheet()")
+        assert tab.url == base + "/" and tab.title() == "PaperPull"
+        assert "Export it again" in tab.inner_text("#noticetext")
+        tab.evaluate("failureApp = 'Shop Receipts'")
+        tab.evaluate("revealFailure()")
+        assert tab.url == base + "/" and tab.title() == "PaperPull"
+        assert "no recent failure file" in tab.inner_text("#noticetext")
+        assert handed == []
+    finally:
+        context.close()
+
+
 def test_on_the_server_its_own_forms_still_set_the_password_and_sign_in_and_out(
         browser, port, shop, monkeypatch):
     """Each is a form a page of the server's posts, which the browser marks

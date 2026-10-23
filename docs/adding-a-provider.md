@@ -211,7 +211,8 @@ guard refuses controls that commit something, that the URL check refuses
 other hosts, that no function clicks what a bare selector finds, that a
 failed capture removes the empty file it left, that `new-this-run.txt` is
 replaced on every download run (even an empty one) and kept as it is by
-Discover and Rename, and that `write_run_summary`
+Discover, Verify, Rename and a dry run (`lists_what_it_saved`), and that
+`write_run_summary`
 ends with `report_run_result(s)` and `main` returns 130 on Ctrl+C, which is
 how the control panel tells a clean run from a bad one. The last two arrived
 after most contributors had cloned their template, and every provider merged

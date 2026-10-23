@@ -6,7 +6,9 @@ download run that is right, including when it downloaded nothing (#17).
 For diagnose and record, which download nothing by design, it destroyed a
 list that was still true. Found by auditing the recorder. So did Rename,
 which the panel runs after every download run of an account with a
-documents folder, to move what it saved there (#103).
+documents folder, to move what it saved there (#103). Verify and a dry run
+still write a summary, which tools/status.py reads as the last run, and
+leave the list as it is (test_new_file_list.py).
 """
 import ast
 import re

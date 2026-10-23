@@ -62,6 +62,29 @@ def stopped_early() -> bool:
     return sys.exc_info()[1] is not None
 
 
+# The runs that write a run summary yet save nothing. Verify checks the
+# files already saved, a dry run (--dry-run, alone or with a download mode)
+# plans names and saves none, and Amazon's --reparse-items reads its saved
+# receipts again offline.
+SAVES_NOTHING = ("verify", "dry-run", "reparse-items")
+
+# The second line of new-this-run.txt. Each line names a file where the run
+# saved it, and the list is kept as it is until the next download run, so a
+# Rename or the panel's move to a documents folder since may have given that
+# file another name or folder, or, when two files traded names, given its
+# name to another file.
+NEW_LIST_NOTE = ("# Each file is named as this run saved it. A Rename or a move since may "
+                 "have given it another name or folder, or given its name to another file.\n")
+
+
+def lists_what_it_saved(stats, args=None) -> bool:
+    """Whether a run's summary writes new-this-run.txt, the list of the files
+    it saved. A run that saves nothing leaves the list as the last download
+    run wrote it, as Discover and Rename leave it by writing no summary at
+    all, so the list always says what was last downloaded."""
+    return stats.get("mode") not in SAVES_NOTHING and not getattr(args, "dry_run", False)
+
+
 def report_run_result(stats):
     result = {name: int(stats.get(name, 0)) for name in
               ("manual_review", "failed", "validation_failures")}

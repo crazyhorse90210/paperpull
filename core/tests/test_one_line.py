@@ -194,6 +194,33 @@ def test_a_config_file_named_with_a_line_break_is_refused(tmp_path):
     assert chr(92) + "n" + chr(92) + "nevent: done" in said
 
 
+@pytest.mark.parametrize("key", ["output_dir", "documents_dir"])
+def test_a_name_that_is_not_utf8_is_refused_for_what_it_is(tmp_path, key):
+    """A folder on Linux whose name is not UTF-8, read as half of a
+    character for each byte UTF-8 does not take. Under the control panel the
+    run's first print of it stopped the run, and from a terminal its
+    records named a file that is not there, each half kept as U+FFFD (the
+    release review of 0.57.0, measured in WSL). So it is still refused,
+    and the refusal no longer calls it a line break."""
+    value = str(tmp_path / ("Caf" + chr(0xdce9) + " Statements"))
+    data = {"output_dir": str(tmp_path / "out"), key: value}
+    with pytest.raises(SystemExit) as stopped:
+        storage.load_config(_write(tmp_path / "app", data))
+    said = str(stopped.value)
+    assert key in said and "not UTF-8" in said and "line break" not in said, said
+    assert "Caf" + chr(92) + "udce9" in said and len(said.splitlines()) == 1
+    assert not (tmp_path / "out").exists()
+
+
+def test_a_config_path_that_is_not_utf8_is_said_for_what_it_is(tmp_path):
+    """The path itself, as a config in such a folder is read. Checked
+    without the disk, since Windows and a Mac make no such name."""
+    said = storage._not_on_one_line({}, tmp_path / ("Caf" + chr(0xdce9)) / "config.json")
+    assert said.startswith("The config file's path, ") and "not UTF-8" in said, said
+    both = storage._not_on_one_line({}, tmp_path / ("Caf" + chr(0xdce9) + LF) / "config.json")
+    assert "line break" in both and "not UTF-8" not in both, both
+
+
 def test_a_config_that_is_not_there_is_named_on_one_line(tmp_path):
     with pytest.raises(SystemExit) as stopped:
         storage.load_config(tmp_path / ("config.x" + LF + "y.json"))

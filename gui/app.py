@@ -3458,9 +3458,13 @@ def _start_run(app: str, account: str, action: str, scope_flags, redownload=Fals
     # only while nothing below would refuse it, so a request that runs
     # nothing changes nothing. Asked again in the stream with nothing awaited,
     # so two tabs pressing at once may both get here, and both write the
-    # same folder.
+    # same folder. Only before a download run, the one whose documents go
+    # there. A Move or a Rename goes where the config says, which is where
+    # the page says it goes, the account's own folder for one with no
+    # setting.
     documents_said = []
-    if not blocked and not _IMPORTING.locked() and (app, account) not in _RUNS:
+    if review is None and action in DOWNLOAD_ACTIONS and not blocked \
+            and not _IMPORTING.locked() and (app, account) not in _RUNS:
         try:
             documents_said = _documents_before_run(apps, app, account)
         except Exception as e:
@@ -3847,6 +3851,21 @@ def _write_config(cfg_path: Path, key: str, value: str, stamp: str,
     "", rather than the key taken out."""
     if not server_mode.own_file(cfg_path):
         return False
+    # One write at a time (_CONFIG_WRITES), the config read inside it.
+    with _CONFIG_WRITES:
+        return _write_config_now(cfg_path, key, value, stamp, why, keep_empty)
+
+
+# Held while one config is read, copied and written. Two at once, a run
+# filling in its documents folder in one tab and a save in another, each
+# read the config before the other wrote it and took the same Backups
+# folder, so one change was lost, and the copy kept was the other's change
+# or, once the two tripped over one temporary file, no copy at all.
+_CONFIG_WRITES = threading.Lock()
+
+
+def _write_config_now(cfg_path: Path, key: str, value: str, stamp: str, why: str,
+                      keep_empty: bool) -> bool:
     current = _read_json(cfg_path)
     if not isinstance(current, dict):
         return False
@@ -4194,6 +4213,13 @@ def _documents_root_problem(apps: dict, root: str, force: bool = False):
     if problem:
         return problem
     old = _documents_root()
+    # A folder set for one person alone is kept, unless every provider is
+    # given its folder in it, and may not hold this one.
+    held = None if force else _root_held_by(apps, root, old)
+    if held:
+        return ("%s has a folder of their own, %s, that holds that folder, so every provider's "
+                "folder would be inside theirs. Choose another folder for them first."
+                % held)
     for name, meta in apps.items():
         for account in meta.get("accounts", ()):
             if not force and not _follows_root(meta, account, old):
@@ -4241,6 +4267,34 @@ def _in_root_problem(apps: dict, app_name: str, account: str, root: str):
     return _documents_problem(apps, app_name, account, want)
 
 
+def _root_held_by(apps: dict, root: str, followed: str, skip=None):
+    """The first account that keeps a folder of its own holding the one
+    documents folder `root`, or that is it, as (the name the page gives it,
+    that folder), or None. An account following `followed`, the documents
+    folder in force until now, has none of its own, and `skip` is an (app,
+    account) whose folder is about to be replaced. Every account following
+    the root would have its documents inside that one person's folder."""
+    for name, meta in apps.items():
+        for account in meta.get("accounts", ()):
+            if (name, account) == skip or not _account_config(meta, account).is_file() \
+                    or _follows_root(meta, account, followed):
+                continue
+            own = _documents_of(meta, account)
+            if own and Path(own).is_absolute() and _within(root, own):
+                return _who(name, account), own
+    return None
+
+
+def _root_held_problem(apps: dict, root: str, skip=None):
+    """Why no account may follow the one documents folder, set as it is,
+    into a folder in it, or None (_root_held_by)."""
+    held = _root_held_by(apps, root, root, skip=skip)
+    if held:
+        return ("%s has a folder of their own, %s, that holds the folder for every provider. "
+                "Choose another folder for them first." % held)
+    return None
+
+
 def _own_in_root_problem(apps: dict, app_name: str, account: str, folder: str, root: str):
     """Why a folder set for one account alone cannot be used while the one
     documents folder is set, or None. It may not be that folder itself,
@@ -4251,6 +4305,9 @@ def _own_in_root_problem(apps: dict, app_name: str, account: str, folder: str, r
     if _within(folder, root) and _within(root, folder):
         return ("That is the folder for every provider itself. Use the folder for every "
                 "provider gives this one its folder inside it, or choose another folder.")
+    if _within(root, folder):
+        return ("That folder holds the folder for every provider, so every provider's folder "
+                "would be inside it. Choose another folder.")
     for other_name, other in apps.items():
         for other_account in other.get("accounts", ()):
             if (other_name, other_account) != (app_name, account) and \
@@ -4319,7 +4376,7 @@ def _documents_before_run(apps: dict, app_name: str, account: str) -> list:
     if not isinstance(cfg, dict) or DOCUMENTS_KEY in cfg:
         return []
     want = _documents_for(meta, account, root)
-    problem = _in_root_problem(apps, app_name, account, root)
+    problem = _in_root_problem(apps, app_name, account, root) or _root_held_problem(apps, root)
     if problem:
         return ["Documents stay where they were. %s would get %s inside the folder for every "
                 "provider. %s" % (_who(app_name, account), want, problem)]
@@ -4529,7 +4586,8 @@ def _save_account_documents(body: dict) -> dict:
         # The account's own folder, where its documents go already.
         folder = ""
     if folder and follow:
-        problem = _in_root_problem(apps, app_name, account, docs_root)
+        problem = _in_root_problem(apps, app_name, account, docs_root) or \
+            _root_held_problem(apps, docs_root, skip=(app_name, account))
         if problem:
             raise HTTPException(400, "%s would get %s inside the folder for every provider. %s"
                                 % (_who(app_name, account), folder, problem))
