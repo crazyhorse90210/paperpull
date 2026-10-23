@@ -8,8 +8,8 @@ Usage:
 
 NOT BUILT YET. This first build opens Bank of America's site for you to sign
 in, and lets Record and Diagnose watch the page you leave open. Discover,
-Pilot, Run All and Resume say it is not built yet and stop, and nothing is
-listed or downloaded. A recording of one trip to a statement is what the
+Pilot and Run All say it is not built yet and stop, Resume says nothing has
+been listed yet, and nothing is listed or downloaded. A recording of one trip to a statement is what the
 real app is built from (docs/testing-a-provider.md).
 
 READ-ONLY: this build presses nothing on the bank's pages. It never pays,
@@ -788,7 +788,7 @@ def build_parser() -> argparse.ArgumentParser:
             ("discover", "not built yet, says so and stops"),
             ("pilot", "not built yet, says so and stops"),
             ("all", "not built yet, says so and stops"),
-            ("resume", "not built yet, says so and stops"),
+            ("resume", "nothing is listed yet, says so and stops"),
             ("verify", "re-validate every saved PDF"),
             ("rename", "rename downloaded files to this app's current naming"),
             ("diagnose", "survey the open page (no downloads, nothing pressed)"),

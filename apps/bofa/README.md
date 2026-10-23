@@ -7,8 +7,9 @@ records. Read-only, delete-safe, and part of [PaperPull](../../README.md).
 [issue #121](https://github.com/rheeloaded/paperpull/issues/121). It opens
 Bank of America's site in a browser profile of its own so you can sign in,
 and it lets Record and Diagnose watch the page you leave open. That is all
-it does. Discover, Pilot, Run All and Resume say it is not built yet and
-stop, and nothing is listed or downloaded. Which page lists statements and
+it does. Discover, Pilot and Run All say it is not built yet and stop,
+Resume says nothing has been listed yet, and nothing is listed or
+downloaded. Which page lists statements and
 how a statement's PDF arrives cannot be seen without an account, so the
 real app is built from a recording of one trip to a statement, made by
 someone who banks there.
@@ -70,7 +71,8 @@ paperpull bofa record       record one trip to a statement, press Enter to stop
 paperpull bofa diagnose     survey the page you left open, download nothing
 ```
 
-Discover, Pilot, All and Resume say this app is not built yet and stop.
+Discover, Pilot and All say this app is not built yet and stop, and Resume
+says nothing has been listed yet.
 
 ## Tests
 

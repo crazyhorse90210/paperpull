@@ -15,8 +15,9 @@ All notable changes to PaperPull are recorded here. Versioning follows
   statement. That recording is what the real app is built from. This
   first build opens www.bankofamerica.com in a browser profile of its own
   and does nothing more. It presses nothing on the bank's pages and acts
-  only on bankofamerica.com, and Discover, Pilot, Run All and Resume say
-  it is not built yet and stop, so nothing is listed or downloaded. Login
+  only on bankofamerica.com. Discover, Pilot and Run All say it is not
+  built yet and stop, and Resume says nothing has been listed yet, so
+  nothing is listed or downloaded. Login
   names a sign-in form or a check and never says you are signed in,
   since this build knows no signed-in page yet.
 
