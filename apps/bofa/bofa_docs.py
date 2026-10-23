@@ -40,7 +40,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
-from paperpull_core import doc_types, receipt_pdf
+from paperpull_core import doc_types, receipt_pdf, scope
 from paperpull_core import browser as browser_launcher
 import bofa_site as site
 from paperpull_core.models import State
@@ -335,14 +335,51 @@ class App:
             return False
         return True
 
-    def cmd_discover(self, quiet: bool = False) -> None:
+    def _record_document(self, d: dict) -> int:
+        """Record one listed document {title, date, account}. Returns 1 if new.
+        Nothing reaches here until collect_documents is built."""
+        title = re.sub(r"\s+", " ", (d.get("title") or "")).strip() or "Statement"
+        if doc_types.should_skip(title, self.rules):
+            self.stats["skipped_out_of_scope"] += 1
+            return 0
+        category, summary, confidence = doc_types.classify_document(title, self.rules)
+        if not doc_types.wanted(category, self.config):
+            self.stats["skipped_out_of_scope"] += 1
+            return 0
+        doc = Document(title=title, category=category, summary=summary,
+                       date=(d.get("date") or "").strip(), confidence=confidence,
+                       account=re.sub(r"\s+", " ", (d.get("account") or "")).strip(),
+                       href=d.get("href", ""))
+        if self.discovery.get(doc.key) is not None:
+            return 0
+        rec = doc.to_dict()
+        rec["state"] = State.DISCOVERED.value
+        self.discovery.update(doc.key, rec, save=False)
+        return 1
+
+    def cmd_discover(self, quiet: bool = False) -> int:
         # A listing that stops on the way, however it stops, is noted as one
         # that stopped, for Resume (paperpull_core.listing).
         listing.started(self)
-        # Nothing is asked of the browser. This first build cannot read the
-        # list, so it says so and stops rather than look at a page it does
-        # not know. The list is never noted whole here.
-        self.not_built(site.NotBuilt("the list of statements"))
+        # The browser is attached as every Discover attaches it, so a run
+        # with none open says to sign in first. No tab is opened, read or
+        # pressed. This first build cannot read the list, so it says so and
+        # stops here (bofa_site.NotBuilt), and the list is never noted whole.
+        self.browser()
+        try:
+            raw = site.collect_documents(None, keep=scope.period_filter(self.args, self.config),
+                                         config=self.config)
+        except site.NotBuilt as e:
+            self.not_built(e)
+        n_new = 0
+        for d in raw:
+            n_new += self._record_document(d)
+        self.discovery.save()
+        # The whole list is in, and only now may a Resume that carries on
+        # from it call the run finished (paperpull_core.listing).
+        listing.read_whole(self)
+        self.stats["discovered"] = len(self.discovery.data)
+        return n_new
 
     def _select(self, limit: Optional[int] = None) -> List[Document]:
         docs = [Document.from_dict(v) for v in self.discovery.data.values()]

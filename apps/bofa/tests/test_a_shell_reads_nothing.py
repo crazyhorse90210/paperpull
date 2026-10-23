@@ -2,7 +2,8 @@
 
 Discover, Pilot, Run All and Resume say it is not built yet, to Record
 instead, and stop as a run that stopped, never as a clean run that found
-nothing. None of them asks anything of the browser. Login names a sign-in
+nothing. Discover attaches to the browser as every app's does and asks it
+for no tab, and Resume, with nothing listed, never reaches it. Login names a sign-in
 form or a check and otherwise says it cannot tell, and never says a session
 is signed in. Diagnose reads the page the person left open and follows,
 presses and fetches nothing.
@@ -118,9 +119,18 @@ def _config(tmp_path):
 
 @pytest.fixture
 def no_browser(monkeypatch):
-    def refuse(self):
-        raise AssertionError("the browser was asked for")
-    monkeypatch.setattr(app_mod.App, "browser", refuse)
+    """Discover attaches to the browser as every app's does, and asks it for
+    no tab. The attach is counted, and asking for a tab fails the test."""
+    attached = []
+
+    def attach(self):
+        attached.append(self)
+
+    def no_tab(self):
+        raise AssertionError("a tab was asked for")
+    monkeypatch.setattr(app_mod.App, "browser", attach)
+    monkeypatch.setattr(app_mod.App, "page", no_tab)
+    return attached
 
 
 @pytest.mark.parametrize("command", ["--discover", "--pilot", "--all", "--resume", "--dry-run"])
@@ -135,9 +145,11 @@ def test_a_run_says_it_is_not_built_and_stops(command, tmp_path, capsys, no_brow
         # Resume reads no list, and none was ever read, which the core says
         # in its own words, pointing at Pilot.
         assert "have been listed yet" in said and "Pilot" in said
+        assert not no_browser
     else:
         assert "Bank of America is not built yet" in said
         assert "press Record" in said and "issue #121" in said
+        assert len(no_browser) == 1
     result = [line for line in out.splitlines() if line.startswith(PREFIX)]
     assert result, out
     payload = result[-1][len(PREFIX):]
@@ -155,6 +167,21 @@ def test_a_listing_is_never_noted_whole(command, tmp_path, capsys, no_browser):
     cfg = _config(tmp_path)
     with pytest.raises(SystemExit):
         app_mod.main([command, "--config", str(cfg)])
+    note = json.loads((tmp_path / "out" / "last-listing.json").read_text(encoding="utf-8"))
+    assert note["complete"] is False
+
+
+def test_with_no_browser_open_discover_says_to_sign_in_first(tmp_path, capsys, monkeypatch):
+    """The attach fails the way it does at home with no browser on the port,
+    and the run stops there, before the list is asked for."""
+    def gone(self):
+        raise SystemExit("Could not connect to your signed-in browser.\nRun login.bat first.")
+    monkeypatch.setattr(app_mod.App, "browser", gone)
+    monkeypatch.setattr(site, "collect_documents",
+                        lambda *a, **k: pytest.fail("the list was asked for"))
+    with pytest.raises(SystemExit) as stop:
+        app_mod.main(["--discover", "--config", str(_config(tmp_path))])
+    assert "Run login.bat first" in str(stop.value.code)
     note = json.loads((tmp_path / "out" / "last-listing.json").read_text(encoding="utf-8"))
     assert note["complete"] is False
 
