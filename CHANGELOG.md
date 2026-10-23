@@ -62,6 +62,22 @@ All notable changes to PaperPull are recorded here. Versioning follows
   and by two fresh reviews of this change, each shape proven in a browser
   before the change. The statement links a tester's recording shows name
   their own kind and date, which neither shape touches.
+- **A Wells Fargo statement whose size reads like a form's number is
+  filed as a statement.** Each statement's link names its date and the
+  size of its PDF, "Statement 09/30/26 (123K, PDF)", and a statement with
+  check images can pass a megabyte. A statement of 1099K, 1098K or 5498K
+  was filed as a Tax Document, since both readings took the size for that
+  form, and beside the day's real 1099 the two were refused as twins and
+  neither was saved. One whose size held such a number, 10990K say, was
+  left for a person on every run. Now no reading reads a size, a number
+  with K or M in parentheses before PDF, the reading the app always had
+  included, since a size says nothing of what a document is. Such a link
+  reads like any other statement's, and a form's own name is read as
+  before, 1099K among them. A statement an earlier version filed as a Tax
+  Document downloads once more under Statements, beside the earlier copy.
+  Found by a fresh review of the masked-digits fix above, on the link
+  shape a tester's recording shows, and proven in a browser before the
+  change.
 
 ## [0.57.1] - 2026-10-22
 

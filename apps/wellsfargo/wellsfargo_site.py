@@ -1050,12 +1050,29 @@ class _Found(list):
 # a control is still an entry of the date and kind it was filed as, and a
 # twin it stopped is still refused.
 #
+# A tester's recording shows each statement's link naming its date and the
+# size of its PDF, "Statement 09/30/26 (123K, PDF)" (#27), and a statement
+# with check images can pass a megabyte. Both readings took a size of
+# 1099K, 1098K or 5498K for that form, and the old reading took any size
+# holding one of those numbers, so such a statement was filed as a Tax
+# Document or left for a person. A size says how large the PDF is and
+# nothing of what it is, so no reading reads it, the old one included.
+# Left out of the careful reading alone, it would have left such a
+# statement for a person every run, held as the tax form it was filed as
+# before and so still the twin of the day's real 1099. Left out of every
+# reading, the link reads as any other statement's does. The readings all
+# leave out the same words, so a size never sets them apart, and the two
+# rules still only ever leave a control for a person.
+#
 # A tax form, read with care, is 1099, 1098 or 5498 as a number of its own,
 # 1099INT as much as 1099-INT, or the word tax on its own. Read the old way,
 # it is any of them anywhere.
 _TAX_RE = re.compile(r"(?<![$\d.,])\b(1099|1098|5498)(?![.,]?\d)|\btax\b", re.I)
 _TAX_AS_BEFORE_RE = re.compile(r"1099|1098|5498|tax", re.I)
 _STATEMENT_RE = re.compile(r"\bstatements?\b", re.I)
+# A size is a number with K or M, or KB or MB, in parentheses before PDF.
+# A form's own name is never one, 1099-K written 1099K among them.
+_SIZE_RE = re.compile(r"\(\s*\d[\d,.]*\s*[KM]B?\s*,\s*PDF\s*\)", re.I)
 # What comes just before the last digits of a masked account number,
 # ****1099, the picker's three dots with a space after them, an ellipsis, a
 # run of bullets, dots or x's, a number sign, "ending in" or "account
@@ -1086,6 +1103,11 @@ def _names_a_tax_form(words: str) -> bool:
             continue
         return True
     return False
+
+
+def _unsized(words: str) -> str:
+    """`words` with every size printed in them left out (_SIZE_RE)."""
+    return _SIZE_RE.sub(" ", words)
 
 
 # The words a document's title starts with, by its kind. Discovery writes
@@ -1306,15 +1328,16 @@ def _read_control(el, index: int, wait: Optional[int] = _READ_MS) -> Optional[_S
         href = el.get_attribute("href", **wait_for) or ""
     except Exception:
         href = ""      # shown in a survey, never what decides anything
-    words = name + " " + str(where.get("own") or "")
-    chain = [str(w) for w in where.get("chain") or ()]
+    # No reading reads a size printed among these words.
+    words = _unsized(name + " " + str(where.get("own") or ""))
+    chain = [_unsized(str(w)) for w in where.get("chain") or ()]
     kind = _kind_of(words, chain)
     # The same careful reading without the two rules the review of the SBA
     # port brought, every form's number a form and nothing read past the
     # element that dated the control or its row. Those rules only ever
     # leave a control for a person, never file one this reading would not.
     kind_near = _kind_of(words, chain[:int(where.get("bounded") or 0)], _TAX_RE.search)
-    kind_as_before = "tax" if _TAX_AS_BEFORE_RE.search(name + " " + ("" if named else row_text)) else "statement"
+    kind_as_before = "tax" if _TAX_AS_BEFORE_RE.search(_unsized(name + " " + ("" if named else row_text))) else "statement"
     doubt = "date" if iso != iso_as_before else ("kind" if not kind == kind_near == kind_as_before else "")
     held = kind_near if doubt == "kind" and kind_near == kind_as_before else ""
     return _Seen(index, name, href, iso or iso_as_before, kind, int(where.get("row") or 0),

@@ -964,3 +964,65 @@ def test_a_lone_link_dated_only_by_its_name_reads_no_tabs_menus_or_links_around_
     assert _found(docs) == [(DAY, "statement", STATEMENT)] and docs.unsure == 0
     saved, trace = _download(page, tmp_path, STATEMENT)
     assert saved and presses == ["g-x"], (presses, trace)
+
+
+# --- the size printed after a statement's date ---------------------------------
+#
+# Each statement's link names its date and the size of its PDF, "Statement
+# 09/30/26 (123K, PDF)" in a tester's recording (#27), and a statement with
+# check images can pass a megabyte. Both readings took a size of 1099K,
+# 1098K or 5498K for that form, and the old reading took any size holding
+# one of those numbers, so such a statement was filed as a Tax Document or
+# left for a person.
+
+def _linked(*links):
+    """Documents linked the way the tester's page links them, each a link
+    with no address in a part of its own, inside a form. Each link is a
+    pair of its data-guid and its name."""
+    return _blocks("<form>%s</form>" % "".join(
+        "<div><a role='link' tabindex='0' data-guid='%s'>%s</a></div>" % link for link in links))
+
+
+@pytest.mark.parametrize("size", ["1099K", "1098K", "5498K", "10990K", "15498K", "1,099K", "123K"])
+def test_a_statement_s_size_never_makes_it_a_tax_form(page, presses, tmp_path, size):
+    """A statement of 1099K, 1098K or 5498K was filed as that tax form, and
+    one of 10990K or 15498K was left for a person every run. The size says
+    how large the PDF is and nothing of what it is, so no reading reads it,
+    and the statement is filed and pressed like any other. One of 1,099K or
+    123K was a statement before and still is."""
+    page.set_content(_linked(("g-statement", "Statement 01/31/26 (%s, PDF)" % size)))
+    docs = site.collect_download_docs(page)
+    assert _found(docs) == [(DAY, "statement", STATEMENT)] and docs.unsure == 0
+    saved, trace = _download(page, tmp_path, STATEMENT)
+    assert saved and presses == ["g-statement"], (presses, trace)
+
+
+def test_a_statement_sized_like_a_form_leaves_the_day_s_1099_its_own(page, presses, tmp_path):
+    """Read as a tax form, the statement was a second tax form of its day,
+    so the day's real 1099 was refused as its twin and neither was saved."""
+    page.set_content(_linked(("g-statement", "Statement 01/31/26 (1099K, PDF)"),
+                             ("g-tax", "1099-INT 01/31/26 (45K, PDF)")))
+    assert sorted((d.title, d.rows) for d in site.collect_download_docs(page)) == [(STATEMENT, 1), (TAX, 1)]
+    for title, guid in ((TAX, "g-tax"), (STATEMENT, "g-statement")):
+        presses.clear()
+        saved, trace = _download(page, tmp_path, title)
+        assert saved and presses == [guid], (title, presses, trace)
+
+
+def test_a_run_files_a_statement_of_1099k_under_statements(page, run):
+    page.set_content(_linked(("g-statement", "Statement 01/31/26 (1099K, PDF)")))
+    run.cmd_discover(quiet=True)
+    run.process(run._select())
+    assert _filed(run) == {"Statements": ["g-statement"]}
+
+
+@pytest.mark.parametrize("name", ["1099-INT 01/31/26 (1099K, PDF)", "Form 1099K 01/31/26 (45K, PDF)",
+                                  "Tax form 01/31/26 (5498K, PDF)", "01/31/26 (1099, PDF)"],
+                         ids=["a 1099-INT of 1099K", "a 1099-K written without its hyphen", "a tax form of 5498K",
+                              "a form's number where a size would be"])
+def test_a_form_s_own_name_is_still_read_beside_its_size(page, name):
+    """Only a number with K or M in parentheses before PDF is a size and
+    goes unread. A form's own name is read as it always was, 1099K among
+    them, which is how a 1099-K may be written without its hyphen."""
+    page.set_content(_linked(("g-tax", name)))
+    assert _found(site.collect_download_docs(page)) == [(DAY, "tax", TAX)]
