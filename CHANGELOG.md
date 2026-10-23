@@ -41,6 +41,26 @@ All notable changes to PaperPull are recorded here. Versioning follows
   Found by reading the code and proven in a browser before the change.
   Both apps are still untested, so no archive is known to hold a misfiled
   document.
+- **Wells Fargo no longer takes an account's last four digits for a tax
+  form, nor files a form whose link names only its date as a statement.**
+  Read with care, the last digits of a masked account number, `****1099`,
+  the picker's "... 5498" or "ending in 1098", were taken for a tax form,
+  and the reading the app always had agreed, so that account's statement
+  was filed as a Tax Document, alone or beside another account's statement
+  of the day. And a link naming only its date for a screen reader, with no
+  table row, list item or printed date around it, read nothing around it,
+  so a 1099 or a 5498 printed beside it was filed as an Account Statement.
+  Now such digits are the account's, and such a link reads the part of the
+  page that holds it and no other control, never the tabs or menus around
+  it, and never as its entry. Both rules only ever leave a document for a
+  person, counted in Diagnose, since the kind as the app read it with care
+  before them must agree as well. A lone bullet or asterisk between words,
+  a period's "ending" and a form's name such as 1099-B are never taken for
+  a mask.
+  Found by the review of this reading's port to SBA and American Family,
+  and by a fresh review of this change, each shape proven in a browser
+  before the change. The statement links a tester's recording shows name
+  their own kind and date, which neither shape touches.
 
 ## [0.57.1] - 2026-10-22
 

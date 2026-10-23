@@ -1031,12 +1031,50 @@ class _Found(list):
 # and left alone, so nothing is filed under a kind or a date the old reading
 # would not have given it either.
 #
+# The review of this reading's port to SBA found two more shapes it filed
+# as the wrong kind, a statement of an account whose masked number ends in
+# 1099, and a 1099 whose link names only its date with nothing around it to
+# read. So the careful reading of a kind now takes a masked number's last
+# digits for the account's, and a control with nothing around it reads the
+# part of the page that holds it alone. Its kind is also read with care
+# without those two rules, and a control is a document only where that
+# reading agrees too. A fresh review of this port found that each rule
+# alone filed documents the reading before it had left for a person, a
+# 1099-B printed after a bullet as a statement among them. So the two rules
+# only ever leave a control for a person.
+#
 # A tax form, read with care, is 1099, 1098 or 5498 as a number of its own,
 # 1099INT as much as 1099-INT, or the word tax on its own. Read the old way,
 # it is any of them anywhere.
 _TAX_RE = re.compile(r"(?<![$\d.,])\b(1099|1098|5498)(?![.,]?\d)|\btax\b", re.I)
 _TAX_AS_BEFORE_RE = re.compile(r"1099|1098|5498|tax", re.I)
 _STATEMENT_RE = re.compile(r"\bstatements?\b", re.I)
+# What comes just before the last digits of a masked account number,
+# ****1099, the picker's three dots with a space after them, an ellipsis, a
+# run of bullets or x's, a number sign, "ending in" or "account ending".
+# Those digits are that number's, never a form's, and a statement of an
+# account ending 1099 was filed as a tax form (found by the review of this
+# reading's port to SBA). A lone bullet or asterisk is a separator between
+# words, and "ending" alone ends a period, as in "Year ending 12/31/2025",
+# so neither masks what follows. And a number with letters after it, 1099-B
+# or 1099INT, is a form's name whatever comes before it (fresh review of
+# this port).
+_MASKED_RE = re.compile(r"(?:[*%s]{2,}|[#%s]|\.{3}|x{2,})[\s.-]?$|"
+                        r"\b(?:account|acct|card|loan|number|no)\.?\s+(?:ending|ends)(?:\s+(?:in|with))?\s*:?\s*$|"
+                        r"\b(?:ending|ends)\s+(?:in|with)\s*:?\s*$|"
+                        r"\blast\s+(?:four|4)(?:\s+digits)?\s*:?\s*$" % (chr(0x2022), chr(0x2026)), re.I)
+_FORM_NAME_RE = re.compile(r"-?[a-z]", re.I)
+
+
+def _names_a_tax_form(words: str) -> bool:
+    """Whether `words` name a tax form, read with care (_TAX_RE), never by
+    the last digits of a masked number."""
+    for m in _TAX_RE.finditer(words):
+        if m.group(1) and not _FORM_NAME_RE.match(words, m.end()) and _MASKED_RE.search(words, 0, m.start()):
+            continue
+        return True
+    return False
+
 
 # The words a document's title starts with, by its kind. Discovery writes
 # the title from these, and the download reads the kind back out of it.
@@ -1055,7 +1093,7 @@ def kind_of_title(title: str) -> Optional[str]:
     return None
 
 
-def _kind_of(own: str, chain) -> str:
+def _kind_of(own: str, chain, names_a_form=_names_a_tax_form) -> str:
     """Which kind of document a control fetches, read with care. What its
     own words name, a tax form or a statement. Otherwise the nearest words
     around it that name a kind, so an entry printing "Account statement" is
@@ -1063,13 +1101,14 @@ def _kind_of(own: str, chain) -> str:
     around the control prints of its own, nearest first, with every other
     document control's part left out, so a 1099's link beside a statement's
     says nothing of the statement. With no such words it is a statement, as
-    it always was."""
-    if _TAX_RE.search(own):
+    it always was. `names_a_form` says whether words name a tax form, by
+    default never by a masked number's last digits."""
+    if names_a_form(own):
         return "tax"
     if _STATEMENT_RE.search(own):
         return "statement"
     for words in chain:
-        if _TAX_RE.search(words):
+        if names_a_form(words):
             return "tax"
         if _STATEMENT_RE.search(words):
             return "statement"
@@ -1101,8 +1140,22 @@ def _kind_of(own: str, chain) -> str:
 # "own" is the control's visible text. "chain" is what each element around
 # it prints of its own, nearest first, up to the element that printed the
 # date, leaving out any part that holds another document control and every
-# date. They say what kind of document the control fetches. The numbers are
-# kept in a map on the page's window and nothing is written into the page.
+# date. They say what kind of document the control fetches. A control with
+# no element around it that printed the date and no row or list item around
+# it reads up to the part of the page that holds it and no other control or
+# field, up to six levels up, so a form's name printed beside a link that
+# names only its date says what the link fetches (found by the review of
+# this reading's port to SBA). Tabs, menus and links of the page around it
+# are never read, since "Tax forms" on a tab left a lone statement unsure
+# (fresh review of this port). "bounded" counts the elements of the chain
+# inside the element that printed the date or the row, all that was read
+# before. The part read past them is never the control's entry. The core
+# finds controls by their words when none is named for a document (#38),
+# and this reading does not count one whose name says otherwise as another
+# document control, so taken for their entry, that part would make two such
+# statements of a day one document, and one of them would be pressed for
+# both. The numbers are kept in a map on the page's window and nothing is
+# written into the page.
 _WHERE_JS = r"""(el, pattern) => {
   const dateRe = /(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4}|\d{4}-\d{2}-\d{2}/i;
   const everyDate = new RegExp(dateRe.source, 'gi');
@@ -1115,6 +1168,7 @@ _WHERE_JS = r"""(el, pattern) => {
   };
   const ROWS = 'tr, [role=row], li';
   const CONTROLS = 'a, button, [role=button], [role=link]';
+  const ANY_CONTROL = CONTROLS + ', input, select, textarea, [role=tab], [role=menuitem], [role=option], [role=combobox], [role=listbox]';
   const isDoc = (c) => bill.test((c.getAttribute('aria-label') || c.innerText || '').replace(/\s+/g, ' ').trim());
   const docsIn = (n) => Array.from(n.querySelectorAll(CONTROLS)).filter(isDoc);
   const holding = new Map();
@@ -1155,6 +1209,11 @@ _WHERE_JS = r"""(el, pattern) => {
   };
   const date = dated ? outsideOthers(dated).slice(0, 300) : '';
   const bound = dated && dated !== el ? dated : (el.closest(ROWS) || el);
+  const holdsAnother = (n) => Array.from(n.querySelectorAll(ANY_CONTROL)).some(c => c !== el && !c.contains(el) && !el.contains(c));
+  let reach = bound;
+  if (bound === el)
+    for (let n = el.parentElement, depth = 0; n && depth < 6 && !holdsAnother(n); n = n.parentElement, depth++)
+      reach = n;
   const wordsOf = (a) => {
     const out = [];
     const walker = document.createTreeWalker(a, NodeFilter.SHOW_TEXT);
@@ -1170,17 +1229,19 @@ _WHERE_JS = r"""(el, pattern) => {
     return out.join(' ');
   };
   const chain = [];
-  let worded = null;
-  for (let n = el.parentElement; n && bound.contains(n); n = n.parentElement) {
+  let worded = null, bounded = 0;
+  for (let n = el.parentElement; n && reach.contains(n); n = n.parentElement) {
     const w = wordsOf(n);
     chain.push(w.slice(0, 300));
+    if (!bound.contains(n)) continue;
+    bounded++;
     if (w) worded = n;
   }
   const table = el.closest('tr, [role=row]');
   const row = table && bound.contains(table) ? table : (worded || bound);
   const up = [];
   for (let n = row.parentElement; n; n = n.parentElement) up.push(idOf(n));
-  return {rowText, date, own: (el.innerText || '').trim().slice(0, 300), chain, row: idOf(row), up};
+  return {rowText, date, own: (el.innerText || '').trim().slice(0, 300), chain, bounded, row: idOf(row), up};
 }"""
 
 
@@ -1228,9 +1289,16 @@ def _read_control(el, index: int, wait: Optional[int] = _READ_MS) -> Optional[_S
         href = el.get_attribute("href", **wait_for) or ""
     except Exception:
         href = ""      # shown in a survey, never what decides anything
-    kind = _kind_of(name + " " + str(where.get("own") or ""), [str(w) for w in where.get("chain") or ()])
+    words = name + " " + str(where.get("own") or "")
+    chain = [str(w) for w in where.get("chain") or ()]
+    kind = _kind_of(words, chain)
+    # The same careful reading without the two rules the review of the SBA
+    # port brought, every form's number a form and nothing read past the
+    # element that dated the control or its row. Those rules only ever
+    # leave a control for a person, never file one this reading would not.
+    kind_near = _kind_of(words, chain[:int(where.get("bounded") or 0)], _TAX_RE.search)
     kind_as_before = "tax" if _TAX_AS_BEFORE_RE.search(name + " " + ("" if named else row_text)) else "statement"
-    doubt = "date" if iso != iso_as_before else ("kind" if kind != kind_as_before else "")
+    doubt = "date" if iso != iso_as_before else ("kind" if not kind == kind_near == kind_as_before else "")
     return _Seen(index, name, href, iso or iso_as_before, kind, int(where.get("row") or 0),
                  tuple(where.get("up") or ()), doubt)
 
