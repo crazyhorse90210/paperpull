@@ -8,9 +8,10 @@ survey from a signed-in account, which the Diagnose button produces and
 which contains no personal data. The conversation is
 [issue #45](https://github.com/rheeloaded/paperpull/issues/45).
 
-Downloads your American Family **billing statements, policy documents,
-declarations pages, ID cards and notices** as PDFs. Read-only, delete-safe,
-part of [PaperPull](../../README.md).
+Downloads your American Family **billing statements**, and any tax form
+listed with them, as PDFs. It leaves policy documents, declarations pages,
+ID cards and notices alone. Read-only, delete-safe, part of
+[PaperPull](../../README.md).
 
 ## Help test it, no programming needed
 
@@ -47,7 +48,7 @@ part of [PaperPull](../../README.md).
 7. Attach both files to [issue #45](https://github.com/rheeloaded/paperpull/issues/45)
    with a sentence about what the documents page looks like to you.
 8. When a new build is posted, click **Pilot** and say whether PDFs landed
-   in `Statements\` or `Insurance Documents\`, then attach a fresh
+   in `Statements\` or `Tax Documents\`, then attach a fresh
    Diagnose file.
    If the run printed any lines that begin with `Waited for`, copy
    those into your comment as well. They say which way of waiting
@@ -147,7 +148,7 @@ paperpull amfam pilot             REM once the site layer is confirmed
   the page with the session's own cookies. Otherwise the row's control is
   clicked, once it has passed the guard, and whatever the site does, a
   download event, a PDF response or a new tab, is caught and saved to
-  `Statements\` or `Insurance Documents\`. American Family opens a
+  `Statements\` or `Tax Documents\`. American Family opens a
   statement in a new tab at a `blob:` address the page made itself, so
   the PDF is kept as the page makes it, and the one that tab shows is read.
   The tab is closed afterwards, even one the browser shows only after the
@@ -173,6 +174,12 @@ paperpull amfam pilot             REM once the site layer is confirmed
 
 ## Scope
 
-- Whatever the documents and billing pages list. The survey will show how
-  far back American Family keeps them online and whether older documents
-  sit behind a policy picker or a year filter.
+- Billing statements from Billing & Payments, filed in `Statements\`, and
+  any tax form listed with them, filed in `Tax Documents\`.
+- Not policy documents, declarations pages, ID cards or notices. The app
+  looks only at Billing & Payments and what a bill's Bill details opens,
+  and takes nothing there that is not a bill, a statement or a tax form,
+  so the `Insurance Documents\` folder it makes stays empty.
+- How far back American Family keeps statements online is not known yet.
+  The survey will show it, and whether older statements sit behind a
+  policy picker or a year filter.
