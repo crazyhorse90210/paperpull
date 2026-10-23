@@ -738,9 +738,12 @@ MASKED_LINK_ROW = ("<tr data-guid='r-masked'><td>01/31/2026</td><td><a href='#' 
 @pytest.mark.parametrize("row", [MASKED_ROW % account for account in (
     "Checking ****1099", "IRA ... 5498", "Savings \u2026 1098", "Card \u2022\u2022\u2022\u2022 1099",
     "Account XXXX-5498", "Account #1098", "Card ending in 1099", "Everyday Checking ending in 1098",
-    "Last four digits 5498")] + [MASKED_LINK_ROW],
+    "Last four digits 5498", "Checking \u25cf\u25cf\u25cf\u25cf 1099", "Checking \u00b7\u00b7\u00b7\u00b7 1099",
+    "Account XXXX\u20131099", "Account **** - 1099", "Account ending - 1098", "Everyday Checking *1099")]
+    + [MASKED_LINK_ROW],
     ids=["asterisks", "dots", "an ellipsis", "bullets", "x's", "a number sign", "a card ending in", "ending in",
-         "last four", "in the link's own words"])
+         "last four", "black circles", "middle dots", "x's and an en dash", "asterisks and a dash",
+         "ending and a dash", "one asterisk", "in the link's own words"])
 def test_a_statement_of_an_account_ending_in_a_form_number_is_never_filed_as_a_tax_form(page, presses,
                                                                                         tmp_path, row):
     """The account's masked number ends in 1099, 1098 or 5498, and both
@@ -873,15 +876,57 @@ def test_a_form_named_after_a_bullet_or_an_ellipsis_is_never_filed_as_a_statemen
           % BULLET),
     _page("<tr><td>01/31/2026</td><td>Joint Tenants With Rig%s 1099-B</td>"
           "<td><a href='#' data-guid='g-tax'>View</a></td></tr>" % ELLIPSIS),
-], ids=["a link naming a 1099-INT after a bullet", "a 1099-DIV after a year ending", "a 1098 after a year ending",
-        "a 1098 after a bullet", "a 1099-B after a cut nickname"])
+] + [_page("<tr><td>01/31/2026</td><td>%s</td><td><a href='#' data-guid='g-tax'>View</a></td></tr>" % words)
+     for words in ("Home Mortgage Lo%s 1098" % ELLIPSIS, "Traditional IRA for Jo%s 5498" % ELLIPSIS,
+                   "Brokerage Acco%s 1099 Composite" % ELLIPSIS, "Brokerage Acco%s 1099%sB" % (ELLIPSIS, chr(0x2013)),
+                   "IRA Contribution Information... 5498", "Brokerage ... 1099-B", "Brokerage ... 1099%sB" % chr(0x2013))],
+    ids=["a link naming a 1099-INT after a bullet", "a 1099-DIV after a year ending", "a 1098 after a year ending",
+         "a 1098 after a bullet", "a 1099-B after a cut nickname", "a 1098 after a cut name", "a 5498 after a cut name",
+         "a 1099 Composite after a cut name", "a 1099-B with an en dash after a cut name",
+         "a 5498 after three dots ending a word", "a 1099-B after dots", "a 1099-B with an en dash after dots"])
 def test_a_form_named_after_a_bullet_a_period_or_an_ellipsis_is_still_a_tax_form(page, content):
     """Each was filed as a tax form before, and taken for a masked number's
     digits it was left for a person every run. A period's "ending" is no
     account's, and the dates the careful reading leaves out had put it just
-    before the form."""
+    before the form. Dots right after a letter cut a name short, and the
+    second review found an account's name cut before its form's number."""
     page.set_content(content)
     assert _found(site.collect_download_docs(page)) == [(DAY, "tax", TAX)]
+
+
+@pytest.mark.parametrize("content, title, kept", [
+    (_blocks("<section><p>Tax forms are listed under Tax Documents.</p>"
+             "<div><a href='#' data-guid='g-statement' aria-label='Download PDF January 31, 2026'>PDF</a></div>"
+             "</section><section><div><input type='checkbox' aria-label='Select'> Form 5498 "
+             "<a href='#' data-guid='g-5498' aria-label='Download PDF January 31, 2026'>PDF</a></div></section>"),
+     STATEMENT, (STATEMENT, 2)),
+    (_page("<tr><td>01/31/2026</td><td>Account statement</td><td>Checking %s 1099</td>"
+           "<td><a href='#' data-guid='g-statement'>View</a></td></tr>" % (BULLET * 4),
+           "<tr><td>01/31/2026</td><td>Form 1098</td><td><a href='#' data-guid='g-1098'>View</a></td></tr>"),
+     TAX, (TAX, 2)),
+], ids=["a statement unsure for the words near it", "a statement unsure for its masked number"])
+def test_a_document_the_two_rules_leave_unsure_still_stops_its_twin(page, presses, tmp_path, content, title,
+                                                                   kept):
+    """The rules leave a statement for a person, and a control of the same
+    day that read as its kind both ways, a 5498 whose own part holds a box
+    to tick, or the day's 1098 beside a statement taken for a tax form
+    before, was then alone of its date and kind and was pressed for it. The
+    code before refused both as two rows, and so does this one, since a
+    control only the rules leave unsure is still an entry of what it was."""
+    page.set_content(content)
+    assert [(d.title, d.rows) for d in site.collect_download_docs(page)] == [kept]
+    saved, trace = _download(page, tmp_path, title)
+    assert not saved and presses == [], (presses, trace)
+    assert _refusals(trace) == [TWO_ROWS], trace
+
+
+def test_a_page_showing_only_documents_the_rules_leave_unsure_still_shows_documents(page):
+    """The way to the statements stays on a page that shows dated document
+    controls and otherwise goes to Statements & Documents. A statement only
+    the rules leave for a person is still such a control, so the page is
+    read where it was before rather than left for another."""
+    page.set_content(_page(MASKED_ROW % "Checking ****1099"))
+    assert site._shows_dated_documents(page)
 
 
 @pytest.mark.parametrize("content", [

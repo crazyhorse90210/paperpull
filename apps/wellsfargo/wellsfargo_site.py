@@ -370,7 +370,10 @@ def _shows_dated_documents(page) -> bool:
     not only one that names documents, "View statements" on the accounts
     summary say, which is a way to them and not one of them."""
     try:
-        return _shows_documents(page) and len(_survey(page)) > 0
+        if not _shows_documents(page):
+            return False
+        survey = _survey(page)
+        return len(survey) + len(getattr(survey, "held", ())) > 0
     except Exception:
         return False
 
@@ -1041,7 +1044,11 @@ class _Found(list):
 # reading agrees too. A fresh review of this port found that each rule
 # alone filed documents the reading before it had left for a person, a
 # 1099-B printed after a bullet as a statement among them. So the two rules
-# only ever leave a control for a person.
+# only ever leave a control for a person. A second fresh review found that
+# a control they leave for a person no longer stopped its twin, so a 5498
+# read as a statement both ways was pressed for the day's statement. Such
+# a control is still an entry of the date and kind it was filed as, and a
+# twin it stopped is still refused.
 #
 # A tax form, read with care, is 1099, 1098 or 5498 as a number of its own,
 # 1099INT as much as 1099-INT, or the word tax on its own. Read the old way,
@@ -1051,19 +1058,24 @@ _TAX_AS_BEFORE_RE = re.compile(r"1099|1098|5498|tax", re.I)
 _STATEMENT_RE = re.compile(r"\bstatements?\b", re.I)
 # What comes just before the last digits of a masked account number,
 # ****1099, the picker's three dots with a space after them, an ellipsis, a
-# run of bullets or x's, a number sign, "ending in" or "account ending".
-# Those digits are that number's, never a form's, and a statement of an
-# account ending 1099 was filed as a tax form (found by the review of this
-# reading's port to SBA). A lone bullet or asterisk is a separator between
-# words, and "ending" alone ends a period, as in "Year ending 12/31/2025",
-# so neither masks what follows. And a number with letters after it, 1099-B
-# or 1099INT, is a form's name whatever comes before it (fresh review of
-# this port).
-_MASKED_RE = re.compile(r"(?:[*%s]{2,}|[#%s]|\.{3}|x{2,})[\s.-]?$|"
-                        r"\b(?:account|acct|card|loan|number|no)\.?\s+(?:ending|ends)(?:\s+(?:in|with))?\s*:?\s*$|"
-                        r"\b(?:ending|ends)\s+(?:in|with)\s*:?\s*$|"
-                        r"\blast\s+(?:four|4)(?:\s+digits)?\s*:?\s*$" % (chr(0x2022), chr(0x2026)), re.I)
-_FORM_NAME_RE = re.compile(r"-?[a-z]", re.I)
+# run of bullets, dots or x's, a number sign, "ending in" or "account
+# ending". Those digits are that number's, never a form's, and a statement
+# of an account ending 1099 was filed as a tax form (found by the review of
+# this reading's port to SBA). A lone bullet or asterisk with a space after
+# it is a separator between words, "ending" alone ends a period, as in
+# "Year ending 12/31/2025", and dots right after a letter cut a name short,
+# as in "Home Mortgage Lo... 1098", so none of them masks what follows. And
+# a number with letters after it, 1099-B or 1099INT, is a form's name
+# whatever comes before it (fresh reviews of this port).
+_DOTS = chr(0x2022) + chr(0x25CF) + chr(0x00B7)
+_DASHES = "".join(chr(c) for c in range(0x2010, 0x2016)) + r"\-"
+_MASKED_RE = re.compile(
+    r"(?:(?:[*%(dots)s]{2,}|#|(?<![a-z])(?:\.{3}|%(ellipsis)s)|x{2,})\s*[.%(dashes)s]?\s*|[*%(dots)s])$|"
+    r"\b(?:account|acct|card|loan|number|no)\.?\s+(?:ending|ends)(?:\s+(?:in|with))?\s*[:%(dashes)s]?\s*$|"
+    r"\b(?:ending|ends)\s+(?:in|with)\s*[:%(dashes)s]?\s*$|"
+    r"\blast\s+(?:four|4)(?:\s+digits)?\s*[:%(dashes)s]?\s*$"
+    % {"dots": _DOTS, "ellipsis": chr(0x2026), "dashes": _DASHES}, re.I)
+_FORM_NAME_RE = re.compile(r"[%s]?[a-z]" % _DASHES, re.I)
 
 
 def _names_a_tax_form(words: str) -> bool:
@@ -1256,14 +1268,19 @@ class _Seen:
     row: int        # the entry it belongs to, alike for every control of it
     up: tuple = ()  # what holds that entry, nearest first
     doubt: str = ""  # "date" or "kind" when its two readings disagree on it
+    held: str = ""  # the kind it was filed as before the review's two rules, when only they doubt it
 
 
 class _Survey(list):
     """Every document control a look at the page could read and file, with
     counts of the controls that would not answer and of those whose two
-    readings disagree."""
+    readings disagree. `held` lists the controls only the review's two rules
+    left unsure. Each is still an entry of the date and kind it was filed
+    as before, so a twin it stopped from being guessed at is still stopped
+    (second fresh review of this port)."""
     unread = 0
     unsure = 0
+    held = ()
 
 
 def _read_control(el, index: int, wait: Optional[int] = _READ_MS) -> Optional[_Seen]:
@@ -1299,8 +1316,9 @@ def _read_control(el, index: int, wait: Optional[int] = _READ_MS) -> Optional[_S
     kind_near = _kind_of(words, chain[:int(where.get("bounded") or 0)], _TAX_RE.search)
     kind_as_before = "tax" if _TAX_AS_BEFORE_RE.search(name + " " + ("" if named else row_text)) else "statement"
     doubt = "date" if iso != iso_as_before else ("kind" if not kind == kind_near == kind_as_before else "")
+    held = kind_near if doubt == "kind" and kind_near == kind_as_before else ""
     return _Seen(index, name, href, iso or iso_as_before, kind, int(where.get("row") or 0),
-                 tuple(where.get("up") or ()), doubt)
+                 tuple(where.get("up") or ()), doubt, held)
 
 
 def _rows_of(controls) -> set:
@@ -1316,6 +1334,7 @@ def _survey(page) -> _Survey:
     names documents from this and the download finds its control again
     from it, so the two read a control the same way."""
     out = _Survey()
+    out.held = []
     ctrls = _bill_controls(page)
     try:
         count = ctrls.count()
@@ -1332,9 +1351,17 @@ def _survey(page) -> _Survey:
             continue
         if seen.doubt:
             out.unsure += 1
+            if seen.held:
+                out.held.append(seen)
             continue
         out.append(seen)
     return out
+
+
+def _held_as(survey: _Survey, iso: str, kind: str) -> list:
+    """The controls only the review's two rules left unsure that were filed
+    before as the document of date `iso` and kind `kind`."""
+    return [c for c in survey.held if c.iso == iso and c.held == kind]
 
 
 def collect_download_docs(page) -> List[RawDoc]:
@@ -1408,7 +1435,7 @@ def _add_documents(docs: _Found, survey: _Survey, account: str) -> None:
         docs.append(RawDoc(title=f"{kind_title} - {disp}", account=account, date_text=iso,
                            href=first.href if PDF_HREF_RE.search(first.href or "") else "",
                            text=f"Wells Fargo {kind_title} {disp}", row_index=first.index,
-                           kind=kind, rows=len(_rows_of(controls))))
+                           kind=kind, rows=len(_rows_of(controls + _held_as(survey, iso, kind)))))
 
 
 # Why the download pressed nothing, in the only words that may say so.
@@ -1459,15 +1486,16 @@ def _control_for(page, iso: str, kind: Optional[str], trace: Optional[list] = No
         return None, ""
     survey = _survey(page)
     mine = [c for c in survey if c.iso == iso and c.kind == kind]
-    rows = _rows_of(mine)
+    kin = mine + _held_as(survey, iso, kind)
+    rows = _rows_of(kin)
     if survey.unread:
-        _refuse(trace, "a document control on the page could not be read", iso, survey, mine)
+        _refuse(trace, "a document control on the page could not be read", iso, survey, kin)
         return None, ""
     if not mine:
-        _refuse(trace, "no control of this date is this kind of document", iso, survey, mine)
+        _refuse(trace, "no control of this date is this kind of document", iso, survey, kin)
         return None, ""
     if len(rows) > 1:
-        _refuse(trace, "more than one row of this date holds this kind of document", iso, survey, mine)
+        _refuse(trace, "more than one row of this date holds this kind of document", iso, survey, kin)
         return None, ""
     chosen = mine[0]
     try:

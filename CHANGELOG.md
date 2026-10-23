@@ -54,11 +54,12 @@ All notable changes to PaperPull are recorded here. Versioning follows
   page that holds it and no other control, never the tabs or menus around
   it, and never as its entry. Both rules only ever leave a document for a
   person, counted in Diagnose, since the kind as the app read it with care
-  before them must agree as well. A lone bullet or asterisk between words,
-  a period's "ending" and a form's name such as 1099-B are never taken for
-  a mask.
+  before them must agree as well, and a document they leave for a person
+  still keeps a twin of its day from being guessed at. A lone bullet or
+  asterisk between words, a period's "ending", a name cut short with dots
+  and a form's name such as 1099-B are never taken for a mask.
   Found by the review of this reading's port to SBA and American Family,
-  and by a fresh review of this change, each shape proven in a browser
+  and by two fresh reviews of this change, each shape proven in a browser
   before the change. The statement links a tester's recording shows name
   their own kind and date, which neither shape touches.
 
