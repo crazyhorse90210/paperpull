@@ -61,8 +61,14 @@ def test_a_rename_keeps_the_last_download_runs_list(entry):
     new-this-run.txt with an empty list, and the panel read the list after
     the move, so a Citi run that saved 23 requested statements said
     "Nothing new" (#103). Each app's main() runs here, with the app stood
-    in, and a Rename only tells the panel how it ended."""
-    tree = ast.parse(entry.read_text(encoding="utf-8-sig"))
+    in, and a Rename only tells the panel how it ended. The app's own
+    cmd_rename names its mode as the stand-in's does."""
+    src = entry.read_text(encoding="utf-8-sig")
+    tree = ast.parse(src)
+    rename = next(n for n in ast.walk(tree)
+                  if isinstance(n, ast.FunctionDef) and n.name == "cmd_rename")
+    assert 'self.stats["mode"] = "rename"' in ast.get_source_segment(src, rename), (
+        "%s: cmd_rename does not say its mode is rename" % entry.parent.name)
     main = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "main")
     did = []
 
