@@ -7,7 +7,11 @@ All notable changes to PaperPull are recorded here. Versioning follows
 - **MINOR**, a new app, or a cross-app feature
 - **MAJOR**, breaking changes (repo layout, config format, removing an app)
 
-## [Unreleased]
+## [0.57.1] - 2026-10-22
+
+A run whose documents go to a documents folder says what it saved again,
+and keeps its list of new files. PaperPull Server's spreadsheet Download no
+longer follows a link left in the spreadsheet's place.
 
 ### Security
 - **PaperPull Server's spreadsheet Download no longer follows a link left
