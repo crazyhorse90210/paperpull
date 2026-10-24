@@ -1099,7 +1099,8 @@ def test_a_list_an_earlier_rename_left_stale_is_mended(command, taken, tmp_path,
     so Review Names left the other order's row out as a file two purchases
     name, and Download again counted the other file as this order's. The
     other order's own entry, whose file says it is that invoice, stays where
-    it is, though a copy of it is on file as well."""
+    it is, though a copy of it is on file as well. Rename gives the order's
+    tip the name the rest of the order has, and its entry follows it."""
     app = an_app(tmp_path)
     purchase, other, renamed, entries = left_stale(app, taken)
     asked = []
@@ -1115,8 +1116,12 @@ def test_a_list_an_earlier_rename_left_stale_is_mended(command, taken, tmp_path,
     assert ("1 invoice(s) in the order records named a file an earlier rename moved, "
             "and now name it as it is.") in said, said
     now = holding(app.paths.invoices, "10000000000000041")
+    tip = holding(app.paths.invoices, "10000000000000042")
     record = saved_record(app, purchase)
-    assert record["invoices"] == [entries[0], dict(entries[1], file=str(now))], record
+    assert record["invoices"] == [dict(entries[0], file=str(tip)),
+                                  dict(entries[1], file=str(now))], record
+    if command == "rename":
+        assert Path(entries[0]["file"]).name != tip.name, "the tip takes the order's name"
     if taken:
         theirs = saved_record(app, other)
         assert theirs["invoices"][0]["file"] == theirs["pdf_path"], theirs

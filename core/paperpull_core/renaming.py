@@ -42,6 +42,11 @@ THE RULES
   app's folders, and a file in Manual Review stays in Manual Review, with
   no folders. A folder a rename leaves empty inside one of those is taken
   away, and never one of those folders themselves or one holding anything.
+* The invoices of an order split into several move together. Target and
+  Amazon save one as "(1 of 2)", "(2 of 2)" and so on, with one index row
+  for the order and the others in the record's list of invoices or its
+  notes, and each takes the name the order's row gives the first, with its
+  own part (_invoices_alone, _review_others).
 * Preview is the default everywhere. A caller has to ask for the change.
 * Rename never ends with a file moved and a ledger still giving it the
   name it had. Every ledger is shown to be writable before a file moves,
@@ -954,7 +959,7 @@ def _write_ledgers(app, ledgers, result: Result, numbered: dict, say=print,
                 csv.rewrite(rows)
                 written.append((csv, rows_before))
         writing = _name_of(app.progress)
-        update_progress(app.progress, result)
+        update_progress(app.progress, result, numbered=numbered)
     except BaseException as e:
         moved = len(_moved_by(result))
         stuck, unwritten = _undo(records, written, result)
@@ -1074,42 +1079,55 @@ def update_rows(rows: Iterable[dict], result: Result, *,
     and no path, as in the order history, follows the file of its own order
     or document number when `numbered` says which that is (_numbered), and
     the name alone only when it carries no number.
+
+    The other invoices of an order split into several, which a row's notes
+    name, are named there as a rename left them, by the row's own order
+    number (_follow_also_saved), whether or not the row's own file moved.
     """
     touched = 0
     moved = _moved(result)
     for row in rows:
         old_path = (row.get(path_key) or "").strip()
+        number = _first(row, _ID_KEYS) if numbered is not None else ""
+        new_path = None
         if old_path:
             new_path = moved(old_path)
-            if not new_path:
-                continue
-            row[path_key] = new_path
-            new_name = Path(new_path).name
+            new_name = Path(new_path).name if new_path else None
         else:
             old_name = (row.get(name_key) or "").strip()
-            number = _first(row, _ID_KEYS) if numbered is not None else ""
             # A name two files renamed both had says neither (Result.unclear).
             new_name = (numbered.get((number, old_name)) if number
                         else None if old_name in result.unclear
                         else result.names.get(old_name))
-            if not new_name:
-                continue
-        if name_key in row:
-            row[name_key] = new_name
-        if note and "Notes" in row:
-            row["Notes"] = ((row.get("Notes") or "") + "; " + note).strip("; ")
+        notes = (_follow_also_saved(row.get("Notes"), lambda name: numbered.get((number, name)))
+                 if number else None)
+        if not new_name and notes is None:
+            continue
+        if notes is not None:
+            row["Notes"] = notes
+        if new_name:
+            if new_path:
+                row[path_key] = new_path
+            if name_key in row:
+                row[name_key] = new_name
+            if note and "Notes" in row:
+                row["Notes"] = ((row.get("Notes") or "") + "; " + note).strip("; ")
         touched += 1
     return touched
 
 
 def update_progress(progress, result: Result, *,
                     filename_field: str = "pdf_filename",
-                    path_field: str = "pdf_path") -> int:
+                    path_field: str = "pdf_path",
+                    numbered: Optional[dict] = None) -> int:
     """The same for the run state, whose key is never touched.
 
     The key is the purchase or document identity, which is what stops a
     second download. Renaming a file must not disturb it. A record that
     names its file by its path follows that file alone, as a row does.
+    Its notes name the other invoices of an order split into several as a
+    rename left them, by the record's own order number, when `numbered`
+    says what each file of that number was renamed to (_numbered).
     """
     touched = 0
     moved = _moved(result)
@@ -1133,6 +1151,12 @@ def update_progress(progress, result: Result, *,
         invoices = _follow_invoices(rec.get("invoices"), moved)
         if invoices is not None:
             patch["invoices"] = invoices
+        number = (str(rec.get("order_number") or str(key).partition(":")[2]).strip()
+                  if numbered else "")
+        notes = (_follow_also_saved(rec.get("notes"), lambda name: numbered.get((number, name)))
+                 if number else None)
+        if notes is not None:
+            patch["notes"] = notes
         if not patch:
             continue
         progress.update(key, patch, save=False)
@@ -1173,6 +1197,89 @@ def _follow_invoices(invoices, moved: Callable[[str], Optional[str]]) -> Optiona
             e, changed = dict(e, file=new), True
         out.append(e)
     return out if changed else None
+
+
+# The words a run writes into an order's notes before the other invoices of an
+# order it saved in several, Target's "Also saved a.pdf, b.pdf" and Amazon's
+# "Also saved: a.pdf, b.pdf". Every name ends ".pdf", so a name with a comma
+# in it is read whole.
+_ALSO_SAVED = re.compile(r"(?P<head>Also saved:? )(?P<names>.+?\.pdf(?:, .+?\.pdf)*)"
+                         r"(?=$|;|\. )")
+_NEXT_NAME = re.compile(r"(?<=\.pdf), ")
+
+
+def _plain_name(name: str) -> bool:
+    """Whether text read out of notes is a file's name alone. Notes can be
+    edited by hand, and a name with a folder in it would reach past the
+    folder the order's invoices were saved in."""
+    return (bool(name) and name == name.strip() and name not in (".", "..")
+            and "/" not in name and "\\" not in name and Path(name).name == name)
+
+
+def _also_saved_names(notes) -> List[str]:
+    """Each file name an order's notes say was saved beside its first
+    invoice, in the order they are written."""
+    if not isinstance(notes, str) or "Also saved" not in notes:
+        return []
+    return [name for m in _ALSO_SAVED.finditer(notes)
+            for name in _NEXT_NAME.split(m.group("names")) if _plain_name(name)]
+
+
+def _also_saved(rec) -> List[str]:
+    """Each other invoice of an order its record's notes name, as a path in
+    the folder of the record's pdf_path, where the run that wrote the notes
+    saved them beside the first. Amazon names them nowhere else."""
+    recorded = _text(rec.get("pdf_path")) if isinstance(rec, dict) else ""
+    if not recorded:
+        return []
+    folder = Path(recorded).parent
+    return [str(folder / name) for name in _also_saved_names(rec.get("notes"))]
+
+
+def _follow_also_saved(notes, new_name: Callable[[str], Optional[str]]) -> Optional[str]:
+    """Notes with each name an "Also saved" list in them gives replaced by
+    the name `new_name` gives for it, or None when no name changed. The
+    other invoices of an order are found by their names there, Amazon's
+    only record of them, so notes left with the old names lost them."""
+    if not isinstance(notes, str) or "Also saved" not in notes:
+        return None
+    changed = False
+
+    def followed(m):
+        nonlocal changed
+        names = _NEXT_NAME.split(m.group("names"))
+        for i, name in enumerate(names):
+            new = new_name(name) if _plain_name(name) else None
+            if new and new != name:
+                names[i], changed = new, True
+        return m.group("head") + ", ".join(names)
+
+    out = _ALSO_SAVED.sub(followed, notes)
+    return out if changed else None
+
+
+def _other_invoices(rec, main: str) -> List[str]:
+    """The invoices of an order split into several, as its record names
+    them, but for `main`, the file the order's index row names, or every
+    one when `main` is "", each once as it is first spelled.
+
+    Target keeps each invoice in the record's list of invoices, and one put
+    aside in Manual Review because it failed its check is not filed with
+    the rest. Amazon names the others in the record's notes alone, and
+    Target names them there as well (_also_saved)."""
+    if not isinstance(rec, dict):
+        return []
+    invoices = rec.get("invoices")
+    listed = [_text(e.get("file")) for e in (invoices if isinstance(invoices, list) else ())
+              if isinstance(e, dict) and e.get("kept", True)]
+    seen = {_same_file(main)} if main else set()
+    out = []
+    for raw in listed + _also_saved(rec):
+        where = _same_file(raw) if raw else ""
+        if where and where not in seen:
+            seen.add(where)
+            out.append(raw)
+    return out
 
 
 def _moved(result: Result):
@@ -1406,11 +1513,12 @@ def run_for(app, apply_changes: bool = False, say=print,
             return ""
         # The record has to name this very file. One a purchase keeps by its
         # order number may speak for an earlier copy, as when Download again
-        # saved a copy that failed its check beside the one that passed.
+        # saved a copy that failed its check beside the one that passed. Its
+        # notes name the other invoices of an order Amazon saved in several.
         invoices = record.get("invoices")
         named = [record.get("pdf_path")] + [
             e.get("file") for e in (invoices if isinstance(invoices, list) else ())
-            if isinstance(e, dict) and e.get("kept", True)]
+            if isinstance(e, dict) and e.get("kept", True)] + _also_saved(record)
         if not any(_text(n) and _one_file(_text(n), raw) for n in named):
             return ""
         try:
@@ -1420,12 +1528,11 @@ def run_for(app, apply_changes: bool = False, say=print,
         return FileName(Path(raw).name, "/".join(inside.parts[:-1]))
 
     name_for = kept_name if documents else build_name
-    # Target keeps each invoice of an order split into several in the
-    # record's list of invoices, and only one of them has an index row. Each
-    # of the others is planned as a row of its own for a move, never written
-    # into the index, so every invoice of the order goes and the run state
-    # follows each (update_progress).
-    planned_rows = primary_rows + (_invoices_alone(app, primary_rows) if documents else [])
+    # Only one invoice of an order split into several has an index row.
+    # Each of the others is planned as a row of its own, never written into
+    # the index, so every invoice of the order takes a new name or goes to
+    # the documents folder, and the run state follows each (update_progress).
+    planned_rows = primary_rows + _invoices_alone(app, primary_rows, documents)
 
     def distinguisher(row):
         # What the download told this file apart by when its name was
@@ -1553,29 +1660,56 @@ def _listed_this_run(app) -> set:
             if line.strip() and not line.startswith("#")}
 
 
-def _invoices_alone(app, rows) -> List[dict]:
-    """A row for each invoice a record's list of invoices names that no
-    index row names, as Target keeps the other invoices of an order split
-    into several, each carrying the order's number, so a move takes every
-    invoice of the order. Only an invoice kept, a file the order's list
-    says passed its check."""
+def _invoices_alone(app, rows, documents: bool = True) -> List[dict]:
+    """A row for each invoice of an order split into several that no index
+    row names, each carrying the order's number, so a rename or a move takes
+    every invoice of the order. The order has one index row, for the invoice
+    naming its items. Target keeps every invoice in the record's list of
+    invoices and Amazon names the others in its notes (_other_invoices), and
+    a rename that took only the file the row names left them under the name
+    the order had before.
+
+    Each is a copy of the order's own index row, the one naming the record's
+    pdf_path or else another of the order's, with the invoice's file in it,
+    so its name is built from the order's date and kind as the first's is.
+    A rename leaves out the invoices of an order with no index row, whose
+    first it does not rename either, and one whose name does not say which
+    invoice of the order it is, since its new name is built from that part
+    (_part_of). A move keeps every name, so it needs neither. An invoice
+    another purchase's rows, record, list of invoices or notes name as well
+    keeps its name, as any file does whose purchase cannot be told
+    (_Known.record_for)."""
     named = {_same_file((r.get("PDF Full Path") or "").strip()) for r in rows
              if (r.get("PDF Full Path") or "").strip()}
     extra = []
     data = getattr(getattr(app, "progress", None), "data", None) or {}
     for key, rec in data.items():
-        if not isinstance(rec, dict) or not isinstance(rec.get("invoices"), list):
+        # Every invoice the record names, the one in pdf_path included when
+        # its list does, since the index row may name another of them.
+        invoices = _other_invoices(rec, "")
+        if not invoices:
             continue
         number = str(rec.get("order_number") or str(key).partition(":")[2]).strip()
-        for entry in rec["invoices"]:
-            raw = _text(entry.get("file")) if isinstance(entry, dict) else ""
-            if not raw or not entry.get("kept", True) or _same_file(raw) in named:
+        main = _text(rec.get("pdf_path"))
+        where = _same_file(main) if main else ""
+        theirs = [r for r in rows if (r.get("Order or Receipt Number") or "").strip() == number]
+        own = next((r for r in theirs
+                    if where and _same_file((r.get("PDF Full Path") or "").strip()) == where
+                    and _one_file((r.get("PDF Full Path") or "").strip(), main)),
+                   theirs[0] if theirs else None)
+        for raw in invoices:
+            if _same_file(raw) in named:
+                continue
+            row = dict(own or {}, **{
+                "PDF Full Path": raw, "PDF Filename": Path(raw).name,
+                "Order or Receipt Number": number,
+                "Purchase Date": str((own or {}).get("Purchase Date")
+                                     or rec.get("purchase_date") or ""),
+                "Processing Status": "Completed", "Notes": ""})
+            if not documents and (own is None or _part_of(row) is None):
                 continue
             named.add(_same_file(raw))
-            extra.append({"PDF Full Path": raw, "PDF Filename": Path(raw).name,
-                          "Order or Receipt Number": number,
-                          "Purchase Date": str(rec.get("purchase_date") or ""),
-                          "Processing Status": "Completed", "Notes": ""})
+            extra.append(row)
     return extra
 
 
@@ -1753,9 +1887,11 @@ class _Known:
                 where = self._file(raw)
                 # Target keeps each invoice of an order split into several in
                 # the record's invoices, and only one of them in pdf_path.
+                # Target and Amazon name the others in its notes as well.
                 invoices = rec.get("invoices")
-                for e in (invoices if isinstance(invoices, list) else ()):
-                    file = _text(e.get("file")) if isinstance(e, dict) else ""
+                files = [_text(e.get("file")) if isinstance(e, dict) else ""
+                         for e in (invoices if isinstance(invoices, list) else ())]
+                for file in files + _also_saved(rec):
                     if self._file(file):
                         self._claims.setdefault(self._file(file), {}).setdefault(
                             name, set()).add(file)
@@ -1933,6 +2069,13 @@ def _one_file(a: str, b: str) -> bool:
         return False
 
 
+def _name_key(name: str) -> str:
+    """A file's name as _same_file reads a path, in one case on Windows and
+    macOS, so a note or a row spelling a name in another case than the file
+    names that file there."""
+    return name.lower() if os.name == "nt" or sys.platform == "darwin" else name
+
+
 def _same_file(raw: str) -> str:
     """A recorded path resolved, and in one case on Windows and macOS,
     whose file systems ignore case unless a folder or volume is set to tell
@@ -1970,6 +2113,10 @@ class ReviewWords:
     items: str = "    Items: "
     question: str = "    New summary (blank=keep, q=quit): "
     renamed: str = "    Renamed -> "
+    # Each other invoice of an order renamed with its first. Said apart, so
+    # the panel, which counts the receipts renamed by the lines saying
+    # "Renamed", counts the receipts given a name, not every file.
+    also: str = "    Also renamed -> "
 
 
 WORDS = ReviewWords()
@@ -1996,7 +2143,7 @@ def keeps_name(text) -> bool:
 # Apple and Uber, written after the rest, print the same without the colons.
 PLAIN_WORDS = ReviewWords(current="    Current file  ", items="    Items  ",
                           question="    New summary (blank=keep, q=quit) ",
-                          renamed="    Renamed to ")
+                          renamed="    Renamed to ", also="    Also renamed to ")
 
 
 def held_receipt(row: dict, paths) -> Optional[Path]:
@@ -2010,7 +2157,8 @@ def held_receipt(row: dict, paths) -> Optional[Path]:
     return held_document(row.get("PDF Full Path"), paths.filing_folders())
 
 
-def _numbers_naming(rows: Iterable[dict], records: dict, lists: bool = True) -> dict:
+def _numbers_naming(rows: Iterable[dict], records: dict, lists: bool = True,
+                    notes: bool = False) -> dict:
     """Each file the index rows and progress records name (_same_file of
     it), with each spelling naming it and the order number of the purchase
     whose row or record it is. A record's number is its order_number, or
@@ -2018,8 +2166,10 @@ def _numbers_naming(rows: Iterable[dict], records: dict, lists: bool = True) -> 
     its pdf_path, and each file of its invoices as well, since Target keeps
     every invoice of an order split into several there and only one of them
     in pdf_path and the order's index row. Without `lists`, the list of
-    invoices is left out. Each comes with the list's entry that names it, or
-    None for a row or a pdf_path."""
+    invoices is left out. With `notes`, each other invoice its notes say was
+    also saved is named too, Amazon's only record of them (_also_saved).
+    Each comes with the list's entry that names it, or None for a row, a
+    pdf_path or notes."""
     out = {}
     named = [((r.get("PDF Full Path") or "").strip(),
               (r.get("Order or Receipt Number") or "").strip(), None) for r in rows]
@@ -2031,6 +2181,8 @@ def _numbers_naming(rows: Iterable[dict], records: dict, lists: bool = True) -> 
         named.append((_text(rec.get("pdf_path")), number, None))
         named += [(_text(e.get("file")), number, e) for e in (
             invoices if isinstance(invoices, list) else ()) if isinstance(e, dict)]
+        if notes:
+            named += [(raw, number, None) for raw in _also_saved(rec)]
     for raw, number, entry in named:
         where = _same_file(raw) if raw else ""
         if where:
@@ -2039,13 +2191,18 @@ def _numbers_naming(rows: Iterable[dict], records: dict, lists: bool = True) -> 
 
 
 def _say_review_undone(e: BaseException, writing: str, moved: bool, stuck: list,
-                       unwritten: list, earlier: bool) -> None:
+                       unwritten: list, earlier: bool, renaming: bool = False) -> None:
     """What Review Names says when a write for a receipt failed and what it
     had done for that receipt was undone (_undo). `moved` says the receipt
     was renamed, `stuck` and `unwritten` are what _undo could not put back,
     and `earlier` says receipts renamed before it in this review were
-    written down."""
-    if isinstance(e, KeyboardInterrupt):
+    written down. With `renaming`, it was stopped while the other invoices
+    of the receipt's order were renamed, before anything was written."""
+    if renaming:
+        what = ("Review Names was stopped while it renamed the other invoices of the order"
+                if isinstance(e, KeyboardInterrupt) else
+                "The other invoices of the order could not be renamed (%s)" % type(e).__name__)
+    elif isinstance(e, KeyboardInterrupt):
         what = "Review Names was stopped while it wrote %s" % writing
     else:
         what = "%s could not be written (%s)" % (writing, type(e).__name__)
@@ -2073,18 +2230,20 @@ def _say_review_undone(e: BaseException, writing: str, moved: bool, stuck: list,
 
 
 def named_by_another(rows: Iterable[dict], records: dict, lists: bool = True,
-                     claims: Optional[Callable[[dict, str], bool]] = None
-                     ) -> Callable[[str, str], bool]:
+                     claims: Optional[Callable[[dict, str], bool]] = None,
+                     notes: bool = False) -> Callable[[str, str], bool]:
     """Whether a file is named by an index row or progress record of
     another purchase than the one whose order number is given, asked as
     another(path, number). A record names its pdf_path and each file of its
     list of invoices (_numbers_naming), or only its pdf_path without
     `lists`, since rows and pdf_path follow every rename and a list an
-    earlier rename left behind may name an old file. `claims(entry, path)`,
-    when given, says whether another purchase's list entry naming the file
-    is a claim on it, asked only of a file asked about. Two spellings are
-    one file only when they are shown to be (_one_file)."""
-    numbers = _numbers_naming(rows, records, lists)
+    earlier rename left behind may name an old file. With `notes`, a record
+    names each other invoice its notes say was also saved as well.
+    `claims(entry, path)`, when given, says whether another purchase's list
+    entry naming the file is a claim on it, asked only of a file asked
+    about. Two spellings are one file only when they are shown to be
+    (_one_file)."""
+    numbers = _numbers_naming(rows, records, lists, notes)
 
     def another(raw: str, number: str) -> bool:
         raw = str(raw or "").strip()
@@ -2095,6 +2254,41 @@ def named_by_another(rows: Iterable[dict], records: dict, lists: bool = True,
             and (entry is None or claims is None or claims(entry, raw))
             for r, n, entry in numbers.get(where, ()))
     return another
+
+
+def _review_others(record: dict, row: dict, path: Path, folders,
+                   claimed: Callable[[str, str], bool]) -> List[Path]:
+    """The other invoices of the order whose first invoice, `path`, a row
+    offered for review names, which a new name for it renames as well.
+
+    Only when the purchase's record names `path`, since an older copy of a
+    purchase is not the first of the invoices its record lists. Each is a
+    PDF the app holds (held_document) whose name says which invoice of the
+    order it is (_part_of), since its new name keeps that part, and that no
+    other purchase's rows, record, list of invoices or notes name, since
+    whose invoice it is cannot be told then (`claimed`)."""
+    recorded = _text(record.get("pdf_path")) if isinstance(record, dict) else ""
+    if not recorded or str(Path(recorded)) != str(path):
+        return []
+    number = _number_of(row)
+    out = []
+    for raw in _other_invoices(record, str(path)):
+        held = held_document(raw, folders)
+        if (held is None or claimed(raw, number)
+                or _part_of({"PDF Filename": held.name,
+                             "Order or Receipt Number": number}) is None):
+            continue
+        out.append(held)
+    return out
+
+
+def _shown_renamed(new: Path, old: Path, home) -> str:
+    """A new name as Review Names says it, with the folders a pattern filed
+    the file in, inside the folder it is filed in, when it went to another
+    folder."""
+    if not _same_folder(new.parent, old.parent):
+        return Path(os.path.relpath(new, home)).as_posix()
+    return new.name
 
 
 # The control panel has no console to ask in, so it asks Review Names in two
@@ -2210,6 +2404,12 @@ def review_names(app, ask, words: ReviewWords = WORDS,
     so an older copy of a purchase whose record names another copy leaves
     that record as it is.
 
+    The first invoice of an order split into several takes the order's
+    other invoices with it, each with its own part, and the order's notes,
+    rows and list of invoices name them as they are now (_review_others).
+    One that cannot be renamed keeps its name and is said, and everything
+    still names it there. A write that fails puts every one of them back.
+
     Run by the control panel, REVIEW_LIST_ENV has it write the receipts it
     would ask about and rename nothing, and REVIEW_ANSWERS_ENV has it take
     the new summaries from the panel instead of asking. A summary given for
@@ -2299,9 +2499,23 @@ def review_names(app, ask, words: ReviewWords = WORDS,
     folders = app.paths.filing_folders()
     homes = _Homes(folders, [f for f in (getattr(app.paths, "manual_review", None),)
                              if f is not None])
+    # The other invoices of each order whose first invoice a receipt offered
+    # is, found before anything is renamed, so a file this review gives a
+    # name is never taken for another order's invoice (_review_others).
+    claimed = named_by_another(rows, getattr(app.progress, "data", None) or {}, notes=True)
+    others = {str(p): _review_others(
+        app.progress.get(f"{r.get('Purchase Type')}:{r.get('Order or Receipt Number')}") or {},
+        r, p, folders, claimed) for r, p in review}
+    carried = set()         # each other invoice renamed with the first of its order
     written = stopped = False
     try:
         for r, old_path in review:
+            if _same_file(str(old_path)) in carried:
+                # An other invoice of an order, with an index row of its own
+                # marked for review, renamed with the first of the order.
+                print(f"  {r.get('Purchase Date')}  #{r.get('Order or Receipt Number')}")
+                print("    It was renamed with the other invoices of its order.\n")
+                continue
             key = f"{r.get('Purchase Type')}:{r.get('Order or Receipt Number')}"
             prog = app.progress.get(key) or {}
             # A list of mappings, each name text, as a damaged record's items
@@ -2345,15 +2559,46 @@ def review_names(app, ask, words: ReviewWords = WORDS,
             rows_before = [dict(row) for row in rows]
             order_rows_before = [dict(orow) for orow in order_rows]
             moved = Result()
-            # Each entry of the record's list of invoices naming this file,
-            # however it is spelled, told while the file is there to be
-            # compared, since afterwards two spellings that read alike may
-            # be two files where a folder tells case apart.
+            # The purchase's record says what a run fetches, and it speaks
+            # for this file only when it names it, or when there is no
+            # record yet. An older copy, put aside before a later run saved
+            # the receipt or put aside a newer copy, keeps rows of its own,
+            # and only those take its new name. Written into the record, it
+            # moved the record off the copy the last run left.
+            # A record whose path is not text names no file, as an empty
+            # one names none (_text). Handed to Path, it stopped the review
+            # with the receipt renamed and its record never written.
+            recorded = prog.get("pdf_path")
+            if not isinstance(recorded, (str, os.PathLike)):
+                recorded = ""
+            ours = not prog or str(Path(recorded)) == str(old_path)
+            # The other invoices of the order, when this is its first, which
+            # take the new name with it (_review_others, which asked the
+            # record before anything moved). One deleted since the review
+            # began is not there to rename.
+            siblings = [s for s in others.get(str(old_path), ()) if s.is_file()]
+            # Each entry of the record's list of invoices naming this file or
+            # one of those, however it is spelled, with the file it names,
+            # told while the files are there to be compared, since afterwards
+            # two spellings that read alike may be two files where a folder
+            # tells case apart.
             invoices = prog.get("invoices")
-            spelled = {_text(e.get("file"))
-                       for e in (invoices if isinstance(invoices, list) else ())
-                       if isinstance(e, dict)}
-            spelled = {raw for raw in spelled if raw and _one_file(raw, str(old_path))}
+            listed = {_text(e.get("file"))
+                      for e in (invoices if isinstance(invoices, list) else ())
+                      if isinstance(e, dict)}
+            spelled = {}
+            for file in [old_path] + siblings:
+                spelled.update({raw: str(file) for raw in listed
+                                if raw and raw not in spelled and _one_file(raw, str(file))})
+            # And each index row of the purchase naming one of the other
+            # invoices, however it spells it, told the same way. The list
+            # may spell an invoice in another case than its row does.
+            rowed = {}
+            for row in rows:
+                text = (row.get("PDF Full Path") or "").strip()
+                if row.get("Order or Receipt Number") == r.get("Order or Receipt Number") and text:
+                    rowed.update({text: str(s) for s in siblings
+                                  if text not in rowed and _one_file(text, str(s))})
             home, new_name = homes.placed(old_path, new_name)
             try:
                 # The file does not stand in its own way. Asked for a free
@@ -2394,6 +2639,61 @@ def review_names(app, ask, words: ReviewWords = WORDS,
                 print(f"    It could not be renamed ({type(e).__name__}), so it keeps "
                       "its name.\n")
                 continue
+            # Then each other invoice of the order, by the same rules, with its
+            # own part read from its own name as Rename reads it. Left behind,
+            # a new summary reached part of the order, and someone looking for
+            # the order by it found the rest under the name it had before. One
+            # that cannot be renamed, held open by another program, keeps its
+            # name, and the record, the rows and the notes still name it
+            # there, so the next Rename, which names it from the record, finds
+            # it and gives it the new name. Amazon's notes name it in the
+            # folder of the first, so where a pattern's folders took the first
+            # to another folder, only Target's list still leads Rename to it.
+            told = (r.get("Order or Receipt Number") or "").strip()
+            also, refused = {}, []
+            try:
+                for sibling in siblings:
+                    part = _part_of({"PDF Filename": sibling.name,
+                                     "Order or Receipt Number": told})
+                    place, name = homes.placed(sibling, build_pdf_filename(
+                        date, new_summary, doc_type, part=part, record=record))
+                    try:
+                        target = unique_path(place, name, app.config["max_path_length"],
+                                             distinguisher=told, ignoring=sibling, make=False)
+                        if (target.name == sibling.name
+                                and _same_folder(target.parent, sibling.parent)):
+                            continue
+                        if os.path.lexists(target) and not _one_file(str(target), str(sibling)):
+                            raise FileExistsError(17, "Another file has that name", str(target))
+                        _make_folders(target.parent, moved)
+                        sibling.rename(target)
+                    except (OSError, ValueError) as e:
+                        refused.append("    %s could not be renamed (%s), so it keeps its name."
+                                       % (sibling.name, type(e).__name__))
+                        continue
+                    moved.mapping[str(sibling)] = str(target)
+                    also[sibling] = (target, place)
+            except BaseException as e:
+                # Stopped while the other invoices moved, by Ctrl+C, with
+                # nothing written down for this receipt yet. Every file of it
+                # goes back under the name it had, since the ledgers still
+                # name each so, and left renamed, the first was a file Verify
+                # reported missing and no Rename could find again.
+                stopped = True
+                stuck = put_back(moved)
+                tidy(moved, folders)
+                _say_review_undone(e, "", bool(moved.mapping), stuck, [], written,
+                                   renaming=True)
+                raise
+            # Where each file of this receipt is now, and the new name of each
+            # other invoice of the order renamed, which its notes name it by,
+            # read in one case where the file system ignores case.
+            went_to = {str(old_path): new_path}
+            went_to.update({str(s): w for s, (w, _place) in also.items()})
+            renamed = {_name_key(s.name): w.name for s, (w, _place) in also.items()}
+
+            def names(name) -> Optional[str]:
+                return renamed.get(_name_key(name)) if isinstance(name, str) else None
             # The index first, then the order history, then progress.json,
             # as Rename writes them. A file left renamed when the index could
             # not be written, opened in Excel after the check above, kept the
@@ -2404,19 +2704,6 @@ def review_names(app, ask, words: ReviewWords = WORDS,
             try:
                 number = r.get("Order or Receipt Number")
                 old_filename = r.get("PDF Filename")
-                # The purchase's record says what a run fetches, and it speaks
-                # for this file only when it names it, or when there is no
-                # record yet. An older copy, put aside before a later run saved
-                # the receipt or put aside a newer copy, keeps rows of its own,
-                # and only those take its new name. Written into the record, it
-                # moved the record off the copy the last run left.
-                # A record whose path is not text names no file, as an empty
-                # one names none (_text). Handed to Path, it stopped the review
-                # with the receipt renamed and its record never written.
-                recorded = prog.get("pdf_path")
-                if not isinstance(recorded, (str, os.PathLike)):
-                    recorded = ""
-                ours = not prog or str(Path(recorded)) == str(old_path)
                 # Completed is for a receipt that was saved and marked for
                 # review for its name alone, which its record says with
                 # downloaded_ok. A receipt put aside in Manual Review because
@@ -2427,13 +2714,22 @@ def review_names(app, ask, words: ReviewWords = WORDS,
                 # Target once wrote two for most invoice orders, and the one not
                 # renamed named a file that was gone. A row of another purchase
                 # is left as it is, since its other records are not this one's.
+                # A row naming another invoice of the order renamed with it
+                # follows that, and every row of the purchase names those in
+                # its notes as they are now.
                 for row in rows:
-                    text = (row.get("PDF Full Path") or "").strip()
-                    if (row.get("Order or Receipt Number") != number or not text
-                            or str(Path(text)) != str(old_path)):
+                    if row.get("Order or Receipt Number") != number:
                         continue
-                    row["PDF Filename"] = new_path.name
-                    row["PDF Full Path"] = str(new_path)
+                    notes = _follow_also_saved(row.get("Notes"), names)
+                    if notes is not None:
+                        row["Notes"] = notes
+                    text = (row.get("PDF Full Path") or "").strip()
+                    went = (went_to.get(str(Path(text))) or went_to.get(rowed.get(text, ""))
+                            if text else None)
+                    if went is None:
+                        continue
+                    row["PDF Filename"] = went.name
+                    row["PDF Full Path"] = str(went)
                     row["Purchase Summary"] = new_summary
                     if saved:
                         row["Processing Status"] = "Completed"
@@ -2443,19 +2739,27 @@ def review_names(app, ask, words: ReviewWords = WORDS,
                 done.append((app.index_csv, rows_before))
                 writing = _name_of(app.order_csv)
                 for orow in order_rows:
-                    if (orow.get("Order or Receipt Number") == number
-                            and orow.get("PDF Filename") == old_filename):
-                        orow["PDF Filename"] = new_path.name
-                        orow["Purchase Summary"] = new_summary
-                        if saved:
-                            orow["Processing Status"] = "Completed"
+                    if orow.get("Order or Receipt Number") != number:
+                        continue
+                    notes = _follow_also_saved(orow.get("Notes"), names)
+                    if notes is not None:
+                        orow["Notes"] = notes
+                    filename = orow.get("PDF Filename")
+                    went = (new_path.name if filename == old_filename
+                            else names(filename) if filename else None)
+                    if not went:
+                        continue
+                    orow["PDF Filename"] = went
+                    orow["Purchase Summary"] = new_summary
+                    if saved:
+                        orow["Processing Status"] = "Completed"
                 app.order_csv.rewrite(order_rows, backup=not written)
                 done.append((app.order_csv, order_rows_before))
-                # An entry of the record's list of invoices naming this file
-                # follows it, whether or not the record speaks for it
-                # otherwise, since it names this very file (_follow_invoices).
-                invoices = _follow_invoices(
-                    invoices, lambda raw: str(new_path) if raw in spelled else None)
+                # An entry of the record's list of invoices naming one of these
+                # files follows it, whether or not the record speaks for it
+                # otherwise, since it names that very file (_follow_invoices).
+                invoices = _follow_invoices(invoices, lambda raw: (
+                    str(went_to[spelled[raw]]) if spelled.get(raw) in went_to else None))
                 if ours:
                     writing = _name_of(app.progress)
                     named = {"summary": new_summary, "pdf_filename": new_path.name,
@@ -2464,6 +2768,9 @@ def review_names(app, ask, words: ReviewWords = WORDS,
                         named["state"] = State.COMPLETED.value
                     if invoices is not None:
                         named["invoices"] = invoices
+                    notes = _follow_also_saved(prog.get("notes"), names)
+                    if notes is not None:
+                        named["notes"] = notes
                     app.progress.update(key, named)  # key (purchase identifier) unchanged
                 elif invoices is not None:
                     writing = _name_of(app.progress)
@@ -2478,14 +2785,16 @@ def review_names(app, ask, words: ReviewWords = WORDS,
                     raise SystemExit(1) from e
                 raise
             written = True
+            carried.update(_same_file(str(s)) for s in also)
             # Written down where it is now, so a folder it left empty goes.
             tidy(moved, folders)
-            if not moved.mapping:
-                print("    It already has that name, so the file stays as it is.\n")
-            elif not _same_folder(new_path.parent, old_path.parent):
-                print(f"{words.renamed}{Path(os.path.relpath(new_path, home)).as_posix()}\n")
+            if str(old_path) not in moved.mapping:
+                said = ["    It already has that name, so the file stays as it is."]
             else:
-                print(f"{words.renamed}{new_path.name}\n")
+                said = [words.renamed + _shown_renamed(new_path, old_path, home)]
+            said += [words.also + _shown_renamed(w, s, place)
+                     for s, (w, place) in also.items()]
+            print("\n".join(said + refused) + "\n")
     finally:
         # Said by the review's own words instead when a write failed.
         if written and not stopped:

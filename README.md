@@ -653,7 +653,8 @@ items. It asks in a console for a better name for each receipt the app was
 unsure of, one at a time. The panel has the same review as **Review names**
 under a receipt provider's More, which lists those receipts and renames each
 one you type a better summary for, and that is how PaperPull Server offers
-it. The double-click file is also the one in a folder the installed app
+it. An order saved as several invoices takes the new name on every one of
+them. The double-click file is also the one in a folder the installed app
 made, since the panel does the rest there, and in such a folder it runs on
 the app's own Python.
 

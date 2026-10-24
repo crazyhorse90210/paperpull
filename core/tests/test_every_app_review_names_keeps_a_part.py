@@ -145,11 +145,11 @@ def test_the_apps_that_name_a_part_have_review_names():
 def test_a_new_name_keeps_the_part_of_a_split_order(app, tmp_path, monkeypatch):
     """The first invoice of an order split in two, saved and marked for
     review for its name, as each app's own run writes one down. The second
-    is beside it, named in the record's notes alone, as Target keeps it.
+    is beside it, named in the record's notes alone, as Amazon keeps it.
     A new name keeps "(1 of 2)", the record and both CSVs follow it, the
-    second invoice is left as it is, and the Rename after it finds nothing
-    to change. An order that came whole, reviewed in the same run, is
-    given no part."""
+    second invoice takes the new name with its own part, and the Rename
+    after it finds nothing to change. An order that came whole, reviewed in
+    the same run, is given no part."""
     mod = load(app)
     inst = app_in(mod, tmp_path / "out")
     folder = inst.paths.folder_for(ONLINE)
@@ -177,12 +177,13 @@ def test_a_new_name_keeps_the_part_of_a_split_order(app, tmp_path, monkeypatch):
     asked, renamed, said = review_then_rename(mod, inst, monkeypatch, ("Garden Hose", "Lamp"))
 
     wanted = name_of(purchase, "Garden Hose", (1, 2))
+    wanted_second = name_of(purchase, "Garden Hose", (2, 2))
     lamp = name_of(whole, "Lamp", None)
     assert wanted.endswith(" Garden Hose Invoice (1 of 2).pdf"), wanted
     assert lamp.endswith(" Lamp Invoice.pdf"), lamp
     assert len(asked) == 2
-    assert sorted(p.name for p in folder.iterdir()) == sorted([wanted, second.name, lamp])
-    assert second.read_bytes() == second_bytes
+    assert sorted(p.name for p in folder.iterdir()) == sorted([wanted, wanted_second, lamp])
+    assert (folder / wanted_second).read_bytes() == second_bytes
     record = inst.progress.get(purchase.key)
     assert (record["pdf_filename"], record["pdf_path"]) == (wanted, str(folder / wanted))
     assert inst.progress.get(whole.key)["pdf_filename"] == lamp
@@ -310,8 +311,9 @@ def test_target_keeps_the_part_of_an_invoice_it_saved(tmp_path, monkeypatch):
     for an order whose two invoices both name its item. Each is placed by
     _place_invoice with the part Target printed on it, the order is filed by
     _file_invoices, and its rows are written as process_one writes them for
-    a name it was unsure of. A new name for the order keeps "(1 of 2)", and
-    the next Rename and the next review leave it."""
+    a name it was unsure of. A new name for the order keeps "(1 of 2)" and
+    reaches the second invoice as well, and the next Rename and the next
+    review leave both."""
     mod = load(REPO / "apps" / "target")
     inst = app_in(mod, tmp_path / "out")
     inst.stats = {"new_files": [], "validation_failures": 0}
@@ -338,7 +340,8 @@ def test_target_keeps_the_part_of_an_invoice_it_saved(tmp_path, monkeypatch):
 
     assert len(asked) == 1
     assert sorted(p.name for p in folder.iterdir()) == [
-        "2026-05-14 Target Garden Hose Invoice (1 of 2).pdf", placed[1]]
+        "2026-05-14 Target Garden Hose Invoice (1 of 2).pdf",
+        "2026-05-14 Target Garden Hose Invoice (2 of 2).pdf"]
     assert renamed == 0, "Rename agrees with the name the review gave, %s" % said
     again = []
     monkeypatch.setattr(mod, "ask", lambda prompt: again.append(prompt) or "Lamp")
