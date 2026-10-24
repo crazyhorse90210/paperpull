@@ -41,6 +41,27 @@ All notable changes to PaperPull are recorded here. Versioning follows
   Found by reading the code and proven in a browser before the change.
   Both apps are still untested, so no archive is known to hold a misfiled
   document.
+- **Wells Fargo presses View Statements & Documents in the Accounts menu
+  (#27).** On 0.57.0 a tester's runs opened the top bar's Accounts menu,
+  found View Statements & Documents in it by its whole name, and still
+  stopped with "the accounts menu has no statements and documents link".
+  Before the press the link's words are read a second time, and that
+  reading took its label or else all of its text, which on the tester's
+  page holds something the name leaves out, most likely a mark hidden from
+  a screen reader or a word written for one alone. Now the link is also
+  read the ways its name is made, its text without the parts hidden from a
+  screen reader or the parts of its own that name it, and what it shows on
+  screen still has to name statements and documents, so a control showing
+  View Check Copies under a name for a screen reader alone is still
+  refused. Every reading, the label included, is checked for words the
+  guard refuses, so a label naming the link on a control that says Close
+  an Account is no longer taken. The Accounts button is pressed only while
+  it is the only button of that name that shows, at every read and at the
+  press, where before it was found again by its place among them (the
+  0.57.0 review). The failure file says how each reading of the link went,
+  in yes or no and lengths, a stop at the link's press says how the link
+  was reached, and when the press does not open the statements page, the
+  file says whether it took the tab elsewhere or opened another tab.
 
 ## [0.57.1] - 2026-10-22
 

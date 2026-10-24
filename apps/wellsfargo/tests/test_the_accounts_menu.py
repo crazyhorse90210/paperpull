@@ -20,6 +20,16 @@ pages here hold all of them, each going somewhere of its own when pressed.
 A menu that shows no such link is left open with nothing more pressed, and
 the stop says what it showed, in counts.
 
+On 0.57.0 the same tester's runs opened the menu, 54 controls showing before
+and 83 after, and found a link by the whole name View Statements &
+Documents, and both still stopped there. The link's own words, read again
+before the press as its aria-label or else its text, were not that whole
+name, so its text holds something its name leaves out, a mark hidden from a
+screen reader or a word drawn for one alone. The link's words are now read
+the ways its name is made, and what it shows still has to name statements
+and documents, so a control showing View Check Copies under a name for a
+screen reader alone is still refused.
+
 Everything here is invented, and real Chromium is driven against made-up
 pages served at Wells Fargo's own addresses.
 """
@@ -454,6 +464,249 @@ def test_only_the_links_whole_name_and_the_buttons_whole_name_are_taken():
         assert not site.is_safe_control("View statement, " + w), w
 
 
+# -- the link's own words, read the ways its name is made (0.57.0) ------------------
+
+# How a site draws words for a screen reader alone, a pixel wide and cut away.
+SR_ONLY = ("position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);"
+           "white-space:nowrap")
+NAME = "View Statements &amp; Documents"
+
+
+def _link(inner, attrs="", name="documents", go=EDOCS):
+    return ('<a role="link" tabindex="0" data-name="%s" data-go="%s"%s>%s</a>'
+            % (name, go, attrs, inner))
+
+
+def _wrong(inner, attrs=""):
+    return _link(inner, attrs, name="wrong", go="/elsewhere/wrong?_x=T0K3N")
+
+
+# The link with the whole name View Statements & Documents and text that,
+# read alone, holds more, each the way a site draws a mark hidden from a
+# screen reader or a word for one alone. Each shows View Statements &
+# Documents.
+WHOLE_BY_NAME = {
+    "a mark hidden from a screen reader": _link(
+        NAME + '<span aria-hidden="true"> &#8250;</span>'),
+    "an icon's word hidden from a screen reader": _link(
+        '<span aria-hidden="true" class="icon">chevron_right</span>' + NAME),
+    "and for a screen reader, the ampersand hidden from one": _link(
+        'View Statements <span aria-hidden="true">&amp;</span><span style="%s">and</span> '
+        'Documents' % SR_ONLY),
+    "labelled by its own part, with a note for a screen reader": _link(
+        '<span id="own-name">%s</span><span style="%s"> opens the page</span>' % (NAME, SR_ONLY),
+        ' aria-labelledby="own-name"'),
+}
+
+
+@pytest.mark.parametrize("shape", list(WHOLE_BY_NAME))
+def test_a_link_whose_text_holds_more_than_its_name_is_pressed(open_site, shape):
+    """The 0.57.0 round. The menu opened and the link showed by its whole
+    name, and its text, read again alone, refused it in both runs. Read the
+    ways its name is made, it is the link."""
+    fake = Site(_page(menu=_menu(WHOLE_BY_NAME[shape])))
+    pg = open_site(fake)
+    way = {}
+    assert site.goto_documents(pg, way=way) is True
+    assert fake.navigations == [EDOCS], fake.navigations
+    assert _pressed(pg) == ["accounts", "documents"], _pressed(pg)
+    read = way["documents_link_read"]
+    assert read["taken"] is True and read["text_is_whole"] is False, read
+    assert read["seen_names_both"] is True and read["words_refused"] is False, read
+
+
+def test_the_made_up_menu_counts_as_the_testers_menu_did(open_site):
+    """The failure file of 0.57.0 counted one control naming statements, two
+    naming documents and none named Statements & Documents alone, with the
+    menu open. The made-up menu with such a link counts the same."""
+    fake = Site(_page(menu=_menu(WHOLE_BY_NAME["a mark hidden from a screen reader"])))
+    pg = open_site(fake)
+    assert site._open_accounts_menu(pg, {}) is not None
+    pg.wait_for_selector("#accounts-panel [data-name=documents]")
+    counts = pg.evaluate(failure._PAGE_STATE_JS)["counts"]
+    assert counts["statements_controls"] == 1 and counts["documents_controls"] == 2, counts
+    assert counts["statements_and_documents_controls"] == 0, counts
+    assert counts["links"] == 0, counts
+
+
+@pytest.mark.parametrize("inner, attrs", [
+    # A label naming the link on a control holding Close an Account, which a
+    # check of the label alone took.
+    ("Close an Account", ' aria-label="%s"' % NAME),
+    # The whole name for a screen reader, and words closing an account
+    # hidden from one.
+    (NAME + '<span aria-hidden="true"> Close an Account</span>', ""),
+])
+def test_a_link_any_of_whose_words_the_guard_refuses_is_never_pressed(open_site, inner, attrs):
+    fake = Site(_page(menu=_menu(_wrong(inner, attrs))))
+    pg = open_site(fake)
+    stop = _stops(pg)
+    # Found by the whole name in the menu, which is left open.
+    assert stop.facts["documents_link_shown"] is True
+    assert pg.get_by_role("link", name=site.DOCUMENTS_LINK_RE).count() == 1
+    assert stop.reason == "the accounts menu has no statements and documents link"
+    assert stop.facts["documents_link_read"]["words_refused"] is True
+    assert _pressed(pg) == ["accounts"], _pressed(pg)
+    assert fake.navigations == []
+
+
+def test_a_link_whose_label_says_something_else_is_never_pressed(open_site):
+    """Named by a part of its own, while its label says View Check Copies.
+    A control with a label takes its label, whatever its other words say."""
+    inner = '<span id="own-name">%s</span>' % NAME
+    fake = Site(_page(menu=_menu(_wrong(inner, ' aria-labelledby="own-name" '
+                                               'aria-label="View Check Copies"'))))
+    pg = open_site(fake)
+    stop = _stops(pg)
+    # Found by the whole name in the menu, which is left open.
+    assert stop.facts["documents_link_shown"] is True
+    assert pg.get_by_role("link", name=site.DOCUMENTS_LINK_RE).count() == 1
+    assert stop.reason == "the accounts menu has no statements and documents link"
+    assert _pressed(pg) == ["accounts"], _pressed(pg)
+    assert fake.navigations == []
+
+
+# Words for a screen reader alone, each way left out of what a control
+# shows on its own, before the words it shows. Each is the only one of
+# those ways that applies to its words.
+UNSEEN = {
+    "drawn a pixel wide": '<span style="display:inline-block;width:1px;height:1px;'
+                          'overflow:hidden;white-space:nowrap">%s</span>',
+    "cut away": '<span style="position:absolute;clip:rect(0 0 0 0);white-space:nowrap">%s</span>',
+    "cut away by a path": '<span style="clip-path:inset(50%%)">%s</span>',
+    "outside its own box": '<span style="position:absolute;left:-10000px">%s</span>',
+}
+# What such a control shows, hidden from a screen reader. The space before
+# it keeps the words apart, so with any one of the ways above not applied,
+# what it shows names statements and documents, and only that way refuses it.
+SHOWS_COPIES = ' <span aria-hidden="true">View Check Copies</span>'
+
+
+@pytest.mark.parametrize("how", list(UNSEEN))
+def test_a_control_showing_view_check_copies_named_for_a_screen_reader_is_never_pressed(
+        open_site, how):
+    """Its name, read the way a screen reader reads it, is the link's whole
+    name, and it shows View Check Copies, which names no statements."""
+    inner = UNSEEN[how] % NAME + SHOWS_COPIES
+    fake = Site(_page(menu=_menu(_wrong(inner))))
+    pg = open_site(fake)
+    stop = _stops(pg)
+    # Found by the whole name in the menu, which is left open.
+    assert stop.facts["documents_link_shown"] is True
+    assert pg.get_by_role("link", name=site.DOCUMENTS_LINK_RE).count() == 1
+    assert stop.reason == "the accounts menu has no statements and documents link"
+    read = stop.facts["documents_link_read"]
+    assert read["said_is_whole"] is True and read["seen_names_both"] is False, read
+    assert _pressed(pg) == ["accounts"], _pressed(pg)
+    assert fake.navigations == []
+
+
+@pytest.mark.parametrize("link", [
+    # Named by a part of its own that is not drawn.
+    _wrong('Statements of Documents Archive<span id="own-name" hidden>%s</span>' % NAME,
+           ' aria-labelledby="own-name"'),
+    # Named by words of the page outside it.
+    _wrong("Older Statements and Tax Documents", ' aria-labelledby="named"')
+    + '<span id="named">%s</span>' % NAME,
+])
+def test_a_link_labelled_by_words_it_does_not_show_as_its_own_is_never_pressed(open_site, link):
+    """What it shows names statements and documents, and is not the link."""
+    fake = Site(_page(menu=_menu(link)))
+    pg = open_site(fake)
+    stop = _stops(pg)
+    # Found by the whole name in the menu, which is left open.
+    assert stop.facts["documents_link_shown"] is True
+    assert pg.get_by_role("link", name=site.DOCUMENTS_LINK_RE).count() == 1
+    assert stop.reason == "the accounts menu has no statements and documents link"
+    read = stop.facts["documents_link_read"]
+    assert read["labelled_by"] is True and read["labelled_by_itself"] is False, read
+    assert read["seen_names_both"] is True, read
+    assert _pressed(pg) == ["accounts"], _pressed(pg)
+    assert fake.navigations == []
+
+
+def test_the_failure_file_says_how_the_links_words_read(open_site, tmp_path):
+    inner = UNSEEN["drawn a pixel wide"] % NAME + SHOWS_COPIES
+    fake = Site(_page(menu=_menu(_wrong(inner))))
+    pg = open_site(fake)
+    stop = _stops(pg)
+    out = failure.write_failure(tmp_path, "run", stop.step, stop.reason, page=pg,
+                                provider="Wells Fargo", extra=stop.facts, say=lambda *a: None)
+    report = json.loads(Path(out).read_text(encoding="utf-8"))
+    # Every fact is kept, the file keeps twenty of them at most.
+    assert len(stop.facts) <= 20 and report["extra"] == stop.facts, (report["extra"], stop.facts)
+    read = report["extra"]["documents_link_read"]
+    assert set(read) == {
+        "words_read", "label_given", "labelled_by", "labelled_by_itself", "label_is_whole",
+        "text_is_whole", "said_is_whole", "labelled_is_whole", "seen_names_both",
+        "words_refused", "hidden_elements", "text_length", "said_length", "seen_length", "taken"}
+    assert read["words_read"] is True and read["label_given"] is False
+    assert read["text_is_whole"] is False and read["said_is_whole"] is True
+    assert read["seen_names_both"] is False and read["taken"] is False
+    assert read["hidden_elements"] == 1
+    assert read["said_length"] == len("View Statements & Documents")
+    # Lengths and yes or no, and no word of the link in the file.
+    raw = Path(out).read_text(encoding="utf-8")
+    assert "Check Copies" not in raw and "View Statements" not in raw
+
+
+def test_a_link_under_a_cover_stops_with_how_it_was_reached(open_site):
+    cover = ('<div data-name="cover" style="position:fixed;top:0;left:0;width:100%;'
+             'height:100%;background:#fff"></div>')
+    fake = Site(_page(menu=_menu() + cover))
+    pg = open_site(fake)
+    with pytest.raises(pressing.Covered) as stop:
+        site.goto_documents(pg)
+    facts = stop.value.facts
+    assert facts["accounts_menu_pressed"] is True and facts["documents_link_shown"] is True
+    assert facts["documents_link_read"]["taken"] is True
+    assert "over_it" in facts
+    assert _pressed(pg) == ["accounts"], _pressed(pg)
+    assert fake.navigations == []
+
+
+@pytest.mark.parametrize("does, tabs", [("window.open('%s')" % EDOCS, 1), ("", 0)])
+def test_a_link_that_does_not_open_the_page_in_this_tab_says_what_it_did(
+        open_site, monkeypatch, does, tabs):
+    monkeypatch.setattr(site, "_OPEN_MS", 2000)
+    link = ('<a role="link" tabindex="0" data-name="documents" onclick="%s">%s</a>'
+            % (does, NAME))
+    fake = Site(_page(menu=_menu(link)))
+    pg = open_site(fake)
+    stop = _stops(pg)
+    assert stop.reason == "the link did not open the statements page"
+    assert stop.facts["tabs_opened"] == tabs and stop.facts["address_changed"] is False
+    assert stop.facts["documents_link_read"]["taken"] is True
+    assert _pressed(pg) == ["accounts", "documents"], _pressed(pg)
+
+
+def test_an_accounts_button_another_comes_before_is_not_pressed_for_it(open_site, monkeypatch):
+    """The 0.57.0 release review's MINOR. The button was the first of those
+    named Accounts by its place, found again at the press, so one drawn
+    before it in between took its place. It has to be the only one that
+    shows, at every read and at the press, or nothing is pressed."""
+    fake = Site(_page())
+    pg = open_site(fake)
+    counted = site._controls_shown
+
+    def and_another_comes(page):
+        page.evaluate("""() => {
+          const b = document.createElement('button');
+          b.dataset.name = 'accounts-two';
+          b.setAttribute('aria-expanded', 'false');
+          b.textContent = 'Accounts';
+          document.querySelector('nav').prepend(b);
+        }""")
+        return counted(page)
+    monkeypatch.setattr(site, "_controls_shown", and_another_comes)
+    way = {}
+    with pytest.raises(pressing.Stop):
+        site.goto_documents(pg, way=way)
+    assert way["accounts_buttons_shown"] == 1
+    assert _pressed(pg) == [], _pressed(pg)
+    assert fake.navigations == []
+
+
 # -- Diagnose -----------------------------------------------------------------------
 
 def _config(tmp_path):
@@ -509,5 +762,8 @@ def test_diagnose_says_the_accounts_menu_opened_the_documents(open_site, tmp_pat
     assert info["documents_link"]["way"]["accounts_menu_pressed"] is True
     assert report["extra"]["way"]["accounts_menu_pressed"] is True
     assert report["extra"]["way"]["documents_link_shown"] is True
+    # How the link's words read, in both files.
+    assert info["documents_link"]["way"]["documents_link_read"]["taken"] is True
+    assert report["extra"]["way"]["documents_link_read"]["taken"] is True
     assert "stopped" not in report["extra"]
     assert _pressed(pg) == ["accounts", "documents"] and fake.navigations == [EDOCS]
