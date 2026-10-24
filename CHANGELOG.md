@@ -7,7 +7,13 @@ All notable changes to PaperPull are recorded here. Versioning follows
 - **MINOR**, a new app, or a cross-app feature
 - **MAJOR**, breaking changes (repo layout, config format, removing an app)
 
-## [Unreleased]
+## [0.58.0] - 2026-10-24
+
+Wells Fargo opens Statements & Documents from the Accounts menu again, and
+it, SBA and American Family tell a statement from a tax form of the same
+day far more carefully. A first Bank of America shell is ready for a tester
+to record. A split order's invoices take a new name together, and the
+documents folder from 0.57.0 gets a round of fixes.
 
 ### Added
 - **Bank of America, a first shell for a tester (#121).** Add it from

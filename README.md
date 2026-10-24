@@ -865,7 +865,7 @@ Every contribution keeps the **read-only, local, no-credentials** design, see
 
 - ✅ All **seventy-eight** apps pass their tests, the seventy-one that are
   supported, the six still waiting for a tester and the Bank of America
-  shell, 29,228 of them
+  shell, 30,677 of them
   across the repo. Most are in regular use by the author. The rest were built or
   confirmed by people who hold those accounts, named in the table above
   and in [Thanks](#thanks).
