@@ -101,6 +101,43 @@ All notable changes to PaperPull are recorded here. Versioning follows
   so a Rename or the move to a documents folder since may have given it
   another name or folder, or its name to another file when two traded
   names, and the README says so for Rename too.
+- **Wells Fargo no longer takes an account's last four digits for a tax
+  form, nor files a form whose link names only its date as a statement.**
+  Read with care, the last digits of a masked account number, `****1099`,
+  the picker's "... 5498" or "ending in 1098", were taken for a tax form,
+  and the reading the app always had agreed, so that account's statement
+  was filed as a Tax Document, alone or beside another account's statement
+  of the day. And a link naming only its date for a screen reader, with no
+  table row, list item or printed date around it, read nothing around it,
+  so a 1099 or a 5498 printed beside it was filed as an Account Statement.
+  Now such digits are the account's, and such a link reads the part of the
+  page that holds it and no other control, never the tabs or menus around
+  it, and never as its entry. Both rules only ever leave a document for a
+  person, counted in Diagnose, since the kind as the app read it with care
+  before them must agree as well, and a document they leave for a person
+  still keeps a twin of its day from being guessed at. A lone bullet or
+  asterisk between words, a period's "ending", a name cut short with dots
+  and a form's name such as 1099-B are never taken for a mask.
+  Found by the review of this reading's port to SBA and American Family,
+  and by two fresh reviews of this change, each shape proven in a browser
+  before the change. The statement links a tester's recording shows name
+  their own kind and date, which neither shape touches.
+- **A Wells Fargo statement whose size reads like a form's number is
+  filed as a statement.** Each statement's link names its date and the
+  size of its PDF, "Statement 09/30/26 (123K, PDF)", and a statement with
+  check images can pass a megabyte. A statement of 1099K, 1098K or 5498K
+  was filed as a Tax Document, since both readings took the size for that
+  form, and beside the day's real 1099 the two were refused as twins and
+  neither was saved. One whose size held such a number, 10990K say, was
+  left for a person on every run. Now no reading reads a size, a number
+  with K or M in parentheses before PDF, the reading the app always had
+  included, since a size says nothing of what a document is. Such a link
+  reads like any other statement's, and a form's own name is read as
+  before, 1099K among them. A statement an earlier version filed as a Tax
+  Document downloads once more under Statements, beside the earlier copy.
+  Found by a fresh review of the masked-digits fix above, on the link
+  shape a tester's recording shows, and proven in a browser before the
+  change.
 
 ## [0.57.1] - 2026-10-22
 
