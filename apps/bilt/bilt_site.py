@@ -921,7 +921,12 @@ CARD_LABEL_RE = re.compile(r"^Bilt [A-Za-z ]*Card\s*[•*]+\s*(\d{4})(?: View)?$
 # A control on the statements sheet that would bring more of the list than
 # it shows: "Load more", "Show older statements", "More", "Older", "View all
 # statements", "Next page". Read whole, from a control's text, aria-label
-# or title. The live sheet showed none. One shown on the sheet stops the
+# or title, and for one drawn as an <input> of type button, submit, image or
+# reset, which Playwright gives a button's role, from its value or an
+# image's alt as well. Such an input was no control here, so a Load more
+# drawn as one let a part of the list be read as whole, where a button stops
+# it. A box to tick or a text field is still none. The live sheet showed
+# none. One shown on the sheet stops the
 # list (_no_pager), and none is ever pressed (FORBIDDEN_CONTROL_RE). "View
 # all" alone is the wallet's own Recent activity link, so "all" counts only
 # with "statements".
@@ -1039,9 +1044,12 @@ _STATE_JS = r"""() => {
     while (sheet && sheet.parentElement && sheet.parentElement !== document.body
            && sheet.parentElement !== document.documentElement && !walletOwn(sheet.parentElement))
       sheet = sheet.parentElement;
-    for (const el of (sheet ? sheet.querySelectorAll('button, [role="button"], a, [role="link"]') : [])) {
+    const controls = 'button, [role="button"], a, [role="link"], input[type="button"], input[type="submit"], '
+      + 'input[type="image"], input[type="reset"]';
+    for (const el of (sheet ? sheet.querySelectorAll(controls) : [])) {
       if (!shown(el)) continue;
-      const said = [el.innerText, el.getAttribute('aria-label'), el.getAttribute('title')].map(tidy);
+      const said = [el.innerText, el.getAttribute('aria-label'), el.getAttribute('title'),
+                    el.tagName === 'INPUT' ? el.value : '', el.getAttribute('alt')].map(tidy);
       if (said.some(s => s && pager.test(s))) out.pagers.push(1);
     }
   }
