@@ -1026,3 +1026,88 @@ def test_a_form_s_own_name_is_still_read_beside_its_size(page, name):
     them, which is how a 1099-K may be written without its hyphen."""
     page.set_content(_linked(("g-tax", name)))
     assert _found(site.collect_download_docs(page)) == [(DAY, "tax", TAX)]
+
+
+# --- the shapes the fresh review of the SBA and American Family port found -----
+#
+# That port carries this reading, and its review found two shapes the two
+# rules saved under a kind they are not, and fixed them there. This app read
+# both the same way, as 0.57.1 did before the rules. Letters running into a
+# masked number from the next word were taken for a form's name, and a
+# control nobody sees cut short the part read around a link. Each is now
+# left for a person.
+
+@pytest.mark.parametrize("control", [
+    "<button data-guid='g-masked'><span>Checking ****1099</span><span>View statement</span></button>",
+    "<a href='#' data-guid='g-masked'><span>Savings ****1099</span><span>PDF</span></a>",
+    "<a href='#' data-guid='g-masked'><span>Checking %s1099</span><span>Statement PDF</span></a>" % (BULLET * 4),
+], ids=["a button", "a link that says PDF", "bullets"])
+def test_a_masked_number_running_into_the_control_s_words_is_still_the_account_s(page, presses, tmp_path,
+                                                                                 control):
+    """The control prints the account's masked number and its own words in
+    two spans with nothing between them, as a page drawn in parts often
+    does, so its words read "Checking ****1099View statement". Any letter
+    after the digits was taken for a form's name, so they were the form's,
+    and the statement was saved as the day's Tax Document. Only a form's
+    letters name a form, so the statement is left for a person, and the
+    day's other statement is still its own."""
+    row = "<tr><td>01/31/2026</td><td>%s</td></tr>" % control
+    page.set_content(_page(row))
+    docs = site.collect_download_docs(page)
+    assert _found(docs) == [] and docs.unsure == 1
+    saved, trace = _download(page, tmp_path, TAX)
+    assert not saved and presses == [], (presses, trace)
+    page.set_content(_page(STATEMENT_ROW, row))
+    docs = site.collect_download_docs(page)
+    assert _found(docs) == [(DAY, "statement", STATEMENT)] and docs.unsure == 1
+    saved, trace = _download(page, tmp_path, TAX)
+    assert not saved and presses == [], (presses, trace)
+    saved, trace = _download(page, tmp_path, STATEMENT)
+    assert saved and presses == ["g-statement"], (presses, trace)
+
+
+@pytest.mark.parametrize("words", ["Brokerage ****1099INT", "Brokerage ****1099-B", "Brokerage ... 1099K",
+                                   "IRA ****5498-SA", "Mortgage ****1098-E", "IRA %s1099R" % (BULLET * 4)])
+def test_a_form_s_own_letters_after_a_masked_number_still_name_the_form(page, words):
+    """A form's letters after the digits, with or without a hyphen, name
+    the form whatever comes before them, as they always did."""
+    page.set_content(_page("<tr><td>01/31/2026</td><td>%s</td><td><a href='#' data-guid='g-tax'>View</a></td></tr>"
+                           % words))
+    assert _found(site.collect_download_docs(page)) == [(DAY, "tax", TAX)]
+
+
+# A 1099-INT's button, naming only its date, for a screen reader.
+DATED_BY_NAME_BUTTON = "<button data-guid='g-1099' aria-label='Download PDF January 31, 2026'>PDF</button>"
+
+
+@pytest.mark.parametrize("part", [
+    "<div><span>Form 1099-INT</span> <form action='#'><input type='hidden' name='id' value='7'>%s</form></div>",
+    "<div><a id='y2026'></a><span>Form 1099-INT</span> <div>%s</div></div>",
+    "<div><span>Form 1099-INT</span> <button style='visibility:hidden'>Remove</button> <div>%s</div></div>",
+    "<div><span>Form 1099-INT</span> <button style='display:block;height:0;padding:0;border:0;overflow:hidden'>"
+    "Remove</button> <div>%s</div></div>",
+], ids=["a hidden field of a form around it", "an empty anchor", "a control shown only on hover",
+        "a control folded to no height"])
+def test_a_control_nobody_sees_does_not_cut_short_what_a_button_reads(page, presses, tmp_path, part):
+    """A 1099-INT's button names only its date, beside the form's name,
+    inside a form whose hidden field carries the row's number, beside an
+    empty anchor, or beside a control the page shows only on hover or folds
+    to no height. Taken
+    for another control, each cut short the part read around the button, so
+    it read as a statement both ways and the 1099-INT was saved as the day's
+    statement. None is drawn on the page, so the form's name is read, and
+    the 1099-INT is left for a person, alone or beside the day's 1099-INT
+    printing its own name."""
+    form = "<div>%s</div>" % (part % DATED_BY_NAME_BUTTON)
+    page.set_content(_blocks(form))
+    docs = site.collect_download_docs(page)
+    assert _found(docs) == [] and docs.unsure == 1
+    saved, trace = _download(page, tmp_path, STATEMENT)
+    assert not saved and presses == [], (presses, trace)
+    page.set_content(_blocks("<div>Form 1099-INT 01/31/2026 "
+                             "<a href='#' data-guid='g-tax'>Download 1099-INT</a></div>", form))
+    docs = site.collect_download_docs(page)
+    assert _found(docs) == [(DAY, "tax", TAX)] and docs.unsure == 1
+    saved, trace = _download(page, tmp_path, STATEMENT)
+    assert not saved and presses == [], (presses, trace)
+    assert _refusals(trace) == ["no control of this date is this kind of document"], trace

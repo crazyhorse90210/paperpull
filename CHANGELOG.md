@@ -7,6 +7,31 @@ All notable changes to PaperPull are recorded here. Versioning follows
 - **MINOR**, a new app, or a cross-app feature
 - **MAJOR**, breaking changes (repo layout, config format, removing an app)
 
+## [Unreleased]
+
+### Fixed
+- **Wells Fargo reads a masked number and the part around a link the way
+  SBA and American Family do.** 0.58.0 gave the three apps one reading of
+  what a document is, but the two fixes the fresh review of SBA's and
+  American Family's copy found reached only those two. On Wells Fargo, in
+  0.58.0 as in 0.57.1, a statement whose masked number runs into the
+  control's own words, as two spans touching draw
+  `Checking ****1099View statement`, was filed as a Tax Document, since any
+  letter after the digits was taken for a form's name. And a 1099-INT whose
+  button names only its date, beside the form's name and a hidden field of
+  a form, an empty anchor or a control shown only on hover, was filed as an
+  Account Statement, since the part read around the button stopped at that
+  control. Now only a form's own letters after the digits, as in 1099-B or
+  1099INT, make them a form's number, and the part read around a link stops
+  only at a control drawn on the page, so both are left for a person,
+  counted in Diagnose. A document is still filed only where the reading
+  without the two rules agrees. The test that holds SBA's and American
+  Family's copies of this reading alike now holds Wells Fargo's too, its
+  whole reader compared with SBA's.
+  Found by the fresh review of the SBA and American Family port and proven
+  in a browser before the change. The statement links a tester's recording
+  shows name their own kind and date, which neither shape touches.
+
 ## [0.58.0] - 2026-10-24
 
 Wells Fargo opens Statements & Documents from the Accounts menu again, and
