@@ -1095,3 +1095,81 @@ def test_a_control_nobody_sees_does_not_cut_short_what_a_button_reads(page, pres
     assert _found(docs) == [] and docs.unsure == 1
     saved, trace = _download(page, tmp_path, STATEMENT)
     assert not saved and presses == [], (presses, trace)
+
+
+# --- a size printed after a document's date ------------------------------------
+#
+# A Wells Fargo tester's recording shows each statement's link naming its
+# date and the size of its PDF, "Statement 09/30/26 (123K, PDF)", and this
+# app's reader is that app's. Both readings took a size of 1099K or 1098K for
+# that form, and the old reading took any size holding one of those numbers,
+# so such a statement was filed as a Tax Document or left for a person.
+
+def _sized(*links):
+    """Documents each linked by a link naming its date and its size, in a
+    part of its own. Each link is a pair of its data-guid and its name."""
+    return _blocks("".join("<div><a href='#' data-guid='%s'>%s</a></div>" % link for link in links))
+
+
+@pytest.mark.parametrize("size", ["1099K", "1098K", "1099 KB", "1.1M", "10990K", "10980K", "1,099K", "123K"])
+def test_a_statement_s_size_never_makes_it_a_tax_form(page, presses, tmp_path, size):
+    """A statement of 1099K or 1098K was filed as that tax form, and one of
+    10990K or 10980K was left for a person every run. The size says how
+    large the PDF is and nothing of what it is, so no reading reads it, and
+    the statement is filed and pressed like any other. One of 1,099K or 123K
+    was a statement before and still is."""
+    page.set_content(_sized(("g-statement", "Statement 01/31/26 (%s, PDF)" % size)))
+    docs = site.collect_download_docs(page)
+    assert _found(docs) == [(DAY, "statement", STATEMENT)] and docs.unsure == 0
+    saved, trace = _download(page, tmp_path, STATEMENT)
+    assert saved and presses == ["g-statement"], (presses, trace)
+
+
+@pytest.mark.parametrize("cells", [
+    "<td>Loan statement (1098K, PDF)</td><td><a href='#' data-guid='g-statement'>View statement</a></td>",
+    "<td>Loan statement</td><td>(1098K, PDF)</td><td><a href='#' data-guid='g-statement'>PDF</a></td>",
+], ids=["beside a View statement", "beside a bare PDF link"])
+def test_a_size_in_a_statement_row_is_read_by_no_reading(page, presses, tmp_path, cells):
+    """The size printed in the row beside the statement's control. Read the
+    old way the row's 1098 made the statement a tax form, and read with care
+    so did the row's words around a bare PDF link, so the statement was left
+    for a person every run."""
+    page.set_content(_page("<tr data-guid='r-statement'><td>01/31/2026</td>%s</tr>" % cells))
+    docs = site.collect_download_docs(page)
+    assert _found(docs) == [(DAY, "statement", STATEMENT)] and docs.unsure == 0
+    saved, trace = _download(page, tmp_path, STATEMENT)
+    assert saved and presses == ["g-statement"], (presses, trace)
+
+
+def test_a_statement_sized_like_a_form_leaves_the_day_s_1098_its_own(page, presses, tmp_path):
+    """Read as a tax form, the statement was a second tax form of its day,
+    so the day's real 1098 was refused as its twin and neither was saved."""
+    page.set_content(_sized(("g-statement", "Statement 01/31/26 (1098K, PDF)"),
+                            ("g-tax", "Form 1098 01/31/26 (45K, PDF)")))
+    assert sorted((d.title, d.rows) for d in site.collect_download_docs(page)) == [(STATEMENT, 1), (TAX, 1)]
+    for title, guid in ((TAX, "g-tax"), (STATEMENT, "g-statement")):
+        presses.clear()
+        saved, trace = _download(page, tmp_path, title)
+        assert saved and presses == [guid], (title, presses, trace)
+
+
+def test_a_run_files_a_statement_of_1099k_under_statements(page, run):
+    page.set_content(_sized(("g-statement", "Statement 01/31/26 (1099K, PDF)")))
+    run.cmd_discover(quiet=True)
+    run.process(run._select())
+    assert _filed(run) == {"Statements": ["g-statement"]}
+
+
+@pytest.mark.parametrize("name", ["Form 1098 01/31/26 (1099K, PDF)", "Form 1099C 01/31/26 (45K, PDF)",
+                                  "Form 1099K 01/31/26 (45K, PDF)", "Form 1099 MISC 01/31/26 (45K, PDF)",
+                                  "Tax form 01/31/26 (1098K, PDF)", "01/31/26 (1098, PDF)"],
+                         ids=["a 1098 of 1099K", "a 1099-C written without its hyphen",
+                              "a 1099-K written without its hyphen", "a 1099-MISC written with a space",
+                              "a tax form of 1098K", "a form's number where a size would be"])
+def test_a_form_s_own_name_is_still_read_beside_its_size(page, name):
+    """Only a number with K or M in parentheses before PDF is a size and
+    goes unread. A form's own name is read as it always was, 1099C, 1099K
+    and 1099 MISC among them, which is how a 1099-C, a 1099-K or a
+    1099-MISC may be written."""
+    page.set_content(_sized(("g-tax", name)))
+    assert _found(site.collect_download_docs(page)) == [(DAY, "tax", TAX)]

@@ -74,6 +74,27 @@ All notable changes to PaperPull are recorded here. Versioning follows
   Found by two fresh reviews of the Wells Fargo port and one of this
   change, each shape proven in a browser before the change, the twins on
   American Family too. No release carried these rules as first written.
+- **SBA and American Family never read a document's size as a tax form.**
+  A Wells Fargo tester's recording shows each statement's link naming its
+  date and the size of its PDF, "Statement 09/30/26 (123K, PDF)", and both
+  apps read a document the way Wells Fargo does. Printed on SBA's page, a
+  statement of 1099K or 1098K would have been filed as a Tax Document,
+  beside the day's real 1098 the two would have been refused as twins,
+  and one of 10990K would have been left for a person every run. American
+  Family took a size printed with a space, 1099 KB, for a 1099 the same
+  way, and a row printing only a date and such a size made a bare View,
+  or a marked PDF link in a payment's row, a tax form's control. Now no
+  reading of what a document is reads a size, a number with K or M in
+  parentheses before PDF, the reading each app always had included, and
+  the words on either side of it stay apart, as the size kept them. Dates
+  are read as before, and a form's name printed any other way is read as
+  it always was. Neither app's pages are known to print a size, so this
+  keeps both in step with Wells Fargo. A new test also holds alike the
+  code the two apps share for reading a document's kind, so a change to
+  one copy fails until the other has it too.
+  Found by the Wells Fargo fix for its own statement sizes and proven in a
+  browser before the change, the words kept apart by a fresh review of
+  this change.
 
 ## [0.57.1] - 2026-10-22
 

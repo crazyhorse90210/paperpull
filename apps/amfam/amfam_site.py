@@ -924,6 +924,27 @@ _MASKED_RE = re.compile(
 _FORM_SUFFIXES = ("A", "B", "C", "CAP", "DA", "DIV", "E", "ESA", "F", "G", "H", "INT", "K", "LS", "LTC", "MA",
                   "MISC", "NEC", "OID", "PATR", "Q", "QA", "R", "S", "SA", "SB", "T")
 _FORM_NAME_RE = re.compile(r"[%s]?(?:%s)(?![a-z])" % (_DASHES, "|".join(_FORM_SUFFIXES)), re.I)
+# A Wells Fargo tester's recording shows each statement's link naming its
+# date and the size of its PDF, "Statement 09/30/26 (123K, PDF)". No American
+# Family page is known to print a size, but one printed with a space, "(1099
+# KB, PDF)", reads as a 1099 the old way and with care, so a statement of
+# that size would have been filed as a Tax Document, and a bare View in a
+# row printing nothing else was taken as a tax form's control. A size says
+# how large the PDF is and nothing of what it is, so no reading of a kind
+# reads it, the old one included, nor the row's words that make a bare View
+# a document control. The readings all leave out the same words, so a size
+# never sets them apart, and the two rules still only ever leave a control
+# for a person. A size is a number with K or M, or KB or MB, in parentheses
+# before PDF. A bar takes its place, so the words on either side stay apart
+# as the size kept them, and "Premium tax (45 KB, PDF)" over "Statement
+# date" never reads as a tax statement (fresh review of this change).
+_SIZE_RE = re.compile(r"\(\s*\d[\d,.]*\s*[KM]B?\s*,\s*PDF\s*\)", re.I)
+
+
+def _unsized(words: str) -> str:
+    """`words` with every size printed in them left out (_SIZE_RE), and the
+    words around it kept apart."""
+    return _SIZE_RE.sub(" | ", words)
 
 
 def _names_a_tax_form(words: str) -> bool:
@@ -1198,10 +1219,12 @@ def _reading(el, index: int, new_only: bool) -> Optional[_Seen]:
     row = el.evaluate(_ROW_OF_JS, arg) or {}
     row_text = str(row.get("text") or "") if isinstance(row, dict) else ""
     row_flat = str(row.get("flat") or "") if isinstance(row, dict) else ""
-    if marked and _marked_row_refuses(row_text, row_flat):
+    # No reading of what a control fetches reads a size printed in its row.
+    # Its dates are read as they always were.
+    if marked and _marked_row_refuses(_unsized(row_text), _unsized(row_flat)):
         return None
     if (not marked and not _STATEMENT_WORDS_RE.search(name)
-            and not _row_names_a_statement(row_text, row_flat)):
+            and not _row_names_a_statement(_unsized(row_text), _unsized(row_flat))):
         return None
     where = el.evaluate(_WHERE_JS, arg) or {}
     iso_as_before = _statement_date(name, row_text, row_flat)
@@ -1212,8 +1235,8 @@ def _reading(el, index: int, new_only: bool) -> Optional[_Seen]:
         href = el.get_attribute("href") or ""
     except Exception:
         href = ""      # shown in a survey, never what decides anything
-    words = name + " " + str(where.get("own") or "")
-    chain = [str(w) for w in where.get("chain") or ()]
+    words = _unsized(name + " " + str(where.get("own") or ""))
+    chain = [_unsized(str(w)) for w in where.get("chain") or ()]
     kind = _kind_of(words, chain)
     # The same careful reading without the two rules the review of this port
     # brought, every form's number a form and nothing read past the row.
@@ -1223,7 +1246,7 @@ def _reading(el, index: int, new_only: bool) -> Optional[_Seen]:
     # A tax form's number only as a number of its own, and tax only as a
     # tax form. Anywhere in a row, a reference number or "Premium tax"
     # made a statement a Tax Document (review of 0.41.0).
-    kind_as_before = "tax" if _A_TAX_FORM_RE.search(name + " " + row_text) else "statement"
+    kind_as_before = "tax" if _A_TAX_FORM_RE.search(_unsized(name + " " + row_text)) else "statement"
     doubt = "date" if iso != iso_as_before else ("kind" if not kind == kind_near == kind_as_before else "")
     held = kind_near if doubt == "kind" and kind_near == kind_as_before else ""
     return _Seen(index, el, name, href, iso or iso_as_before, kind, int(where.get("row") or 0),
