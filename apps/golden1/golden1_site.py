@@ -1106,9 +1106,21 @@ SHOWN = "shown without being drawn again"
 BEFORE = "the list read before"
 NO_LIST = "no list"
 
+# A control drawn as an <input> of type button, submit, image or reset, which
+# Playwright gives a button's role. A dated statement and a Statement History
+# are found by their role (_controls_named, open_statement_history), so one
+# drawn as such an input is found and pressed like a button. The marks and
+# the panels below read links and buttons alone. A history whose dates were
+# drawn as such inputs carried no marks, so the list the account before left
+# in the dialog was taken as drawn again the same after the press, and its
+# statements were listed and saved as the next account's. And with every
+# Statement History drawn so, no panel was found, and the history of the
+# panel that was open was read under the first account's key.
+_INPUT_BUTTONS_CSS = "input[type=button], input[type=submit], input[type=image], input[type=reset]"
+
 _MARK_JS = r"""(attr) => {
   const label = el => (el.getAttribute('aria-label') || el.textContent || '').trim();
-  for (const el of document.querySelectorAll('a, button, [role=link], [role=button]')) {
+  for (const el of document.querySelectorAll('a, button, [role=link], [role=button], """ + _INPUT_BUTTONS_CSS + r"""')) {
     el.setAttribute(attr, label(el));
   }
 }"""
@@ -1329,7 +1341,7 @@ _PANELS_JS = r"""(pattern) => {
   const re = new RegExp(pattern, 'i');
   const out = [];
   const named = (el) => (el.getAttribute('aria-label') || el.textContent || '').trim();
-  const links = [...document.querySelectorAll('a, button, [role=link], [role=button], [role=tab]')]
+  const links = [...document.querySelectorAll('a, button, [role=link], [role=button], [role=tab], """ + _INPUT_BUTTONS_CSS + r"""')]
     .filter(el => re.test(named(el)));
   links.forEach((el, i) => {
     let header = null, box = null;

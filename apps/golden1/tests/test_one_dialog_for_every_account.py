@@ -158,7 +158,7 @@ def _vendor_html(show_at_once=False, same_again=False, held=(), draw_ms=500):
             .replace("HELD_JSON", json.dumps(list(held))).replace("DRAW_JSON", json.dumps(draw_ms)))
 
 
-def _drive(monkeypatch, **kw):
+def _drive(monkeypatch, html=None, **kw):
     pw = pytest.importorskip("playwright.sync_api")
     try:
         driver = pw.sync_playwright().start()
@@ -167,7 +167,7 @@ def _drive(monkeypatch, **kw):
         pytest.skip("no browser to drive: %s" % e)
     ctx = browser.new_context(accept_downloads=True)
     pg = ctx.new_page()
-    pg.set_content(_vendor_html(**kw))
+    pg.set_content(html if html is not None else _vendor_html(**kw))
     monkeypatch.setattr(site, "goto_documents", lambda page: True)
     monkeypatch.setattr(site, "open_vendor", lambda page: pg)
     return driver, browser, pg
@@ -442,3 +442,152 @@ def test_the_heading_words_a_trace_carries_come_from_the_list():
                      "masked_number": True}
     assert site._panel_facts({"heading": "", "sub": []}) == {
         "words": [], "words_under_it": [], "masked_number": False}
+
+
+# -- a control drawn as an input -------------------------------------------------
+#
+# A dated statement and a Statement History are found by their role, and
+# Playwright gives an <input> of type button, submit, image or reset a
+# button's role. The marks set before a press, and the panels, read links and
+# buttons alone, so a control drawn as such an input carried no mark and was
+# no panel's. The member's last page, left in the dialog when the second
+# account's own list never came, was taken as that account's, drawn again the
+# same, and a member statement was pressed and saved as the second
+# account's. And with every Statement History drawn so, the open panel's
+# history was read under the first account's key. Each page is read now as
+# when its controls are links.
+
+INPUT_KINDS = ("button", "submit", "image", "reset")
+STATEMENT_LINK = "'<li><a href=\"#\" class=\"stmt\">' + d + '</a></li>'"
+HISTORY_LINK = '<a href="#" class="hist" data-panel="%d">Statement History</a>'
+MEMBER_OPEN = ('<h2 aria-expanded="true" class="head">Member Share Draft XXXXXX1111 Balance $1,234.56</h2>\n'
+               '   <div class="body" id="p0">')
+SECOND_SHUT = ('<h2 aria-expanded="false" class="head">PLATINUM REWARDS XXXXXXXXXXXX4321 Balance $98.76</h2>\n'
+               '   <div class="body" id="p1" style="display:none">')
+
+
+def _input(kind, more=""):
+    """A control drawn as an <input> of `kind`, an image given a size so
+    that it is drawn."""
+    size = ' src="data:," width="24" height="24"' if kind == "image" else ""
+    return '<input type="%s"%s%s>' % (kind, size, more)
+
+
+def _swap(html, pairs):
+    for old, new in pairs:
+        assert old in html, old
+        html = html.replace(old, new)
+    return html
+
+
+def _statements_as(html, kind):
+    """The vendor's page with each dated statement drawn as an input of
+    `kind`, named for a screen reader by its date, or as its link."""
+    if kind == "link":
+        return html
+    size = ' src="data:," width="24" height="24"' if kind == "image" else ""
+    return _swap(html, [
+        (STATEMENT_LINK, "'<li><input type=\"%s\" class=\"stmt\"%s aria-label=\"' + d + '\"></li>'"
+         % (kind, size)),
+        ("document.querySelectorAll('a.stmt')", "document.querySelectorAll('.stmt')"),
+        ("a.textContent", "a.getAttribute('aria-label')")])
+
+
+def _histories_as(html, kind, open_panel=0):
+    """The vendor's page with each panel's Statement History drawn as an
+    input of `kind`, named for a screen reader, and the second panel the
+    open one when `open_panel` is 1."""
+    html = _swap(html, [(HISTORY_LINK % i, _input(kind, ' class="hist" data-panel="%d" '
+                                                        'aria-label="Statement History"' % i))
+                        for i in (0, 1)]
+                 + [("document.querySelectorAll('a.hist')", "document.querySelectorAll('.hist')")])
+    if open_panel:
+        html = _swap(html, [
+            (MEMBER_OPEN, MEMBER_OPEN.replace('"true"', '"false"').replace('id="p0">', 'id="p0" style="display:none">')),
+            (SECOND_SHUT, SECOND_SHUT.replace('"false"', '"true"').replace(' style="display:none"', ''))])
+    return html
+
+
+@pytest.mark.parametrize("kind", ("link",) + INPUT_KINDS)
+def test_a_list_left_from_the_account_before_is_never_the_next_accounts(monkeypatch, tmp_path, kind):
+    """The second account's own list never comes, and the dialog goes on
+    showing the member account's last page. Drawn as inputs, that page's
+    statements carried no marks and were read as the second account's, and
+    the member's statement of 08/31/24 was pressed and saved as the second
+    account's. It is the list read before now, as with links, and nothing is
+    listed for the second account or pressed for it."""
+    monkeypatch.setattr(site, "HISTORY_WAIT_MS", 3000)
+    driver, browser, pg = _drive(monkeypatch, _statements_as(
+        _vendor_html(show_at_once=True, held=[1, 1, 1]), kind))
+    try:
+        trace: list = []
+        docs = site.collect_download_docs(pg, trace=trace)
+        assert [d.date_text for d in docs if d.account] == [], trace
+        assert len(_dates(docs, "")) == 26
+        shut = [t for t in trace if t.get("note") == "a panel's statement history did not show"]
+        assert [(t["panel"], t["list"]) for t in shut] == [(1, site.BEFORE)], trace
+        out = tmp_path / "second.pdf"
+        later: list = []
+        assert not site.download_bill(pg, tmp_path / "dl", "2024-08-31", out,
+                                      title="Account Statement - August 31, 2024", trace=later,
+                                      account="account ending 4321"), later
+        assert not out.exists() and pg.evaluate("window.__pressed") == []
+    finally:
+        browser.close()
+        driver.stop()
+
+
+@pytest.mark.parametrize("kind", INPUT_KINDS)
+def test_each_account_is_read_from_its_own_list_with_its_statements_drawn_as_inputs(monkeypatch, kind):
+    """The dialog shows the member's last page as it opens for the second
+    account, and the second account's list comes a moment later. Marked
+    now, the member's page is not taken for it, and each account is read
+    from its own list, every page."""
+    driver, browser, pg = _drive(monkeypatch, _statements_as(_vendor_html(show_at_once=True), kind))
+    try:
+        docs = site.collect_download_docs(pg, trace=[])
+        second = [d.date_text for d in docs if d.account]
+        assert len(second) == 15 and all(d.endswith("-20") for d in second), second
+        assert len(_dates(docs, "")) == 26
+    finally:
+        browser.close()
+        driver.stop()
+
+
+@pytest.mark.parametrize("open_panel", [0, 1], ids=["the member's panel open", "the second panel open"])
+@pytest.mark.parametrize("kind", INPUT_KINDS)
+def test_each_account_is_read_from_its_own_list_with_its_history_drawn_as_an_input(monkeypatch, kind,
+                                                                                   open_panel):
+    """Each panel's Statement History drawn as an input. No panel was found,
+    so the page was read the way a page with no panels is, the open panel's
+    first page alone, under the first account's key, and with the second
+    panel open its statements were the member's. Each account is read from
+    its own list now, under its own key, every page."""
+    driver, browser, pg = _drive(monkeypatch, _histories_as(_vendor_html(), kind, open_panel))
+    try:
+        assert len(site.history_panels(pg)) == 2
+        docs = site.collect_download_docs(pg, trace=[])
+        member = _dates(docs, "")
+        second = _dates(docs, "account ending 4321")
+        assert len(member) == 26 and not any(d.endswith("-20") for d in member), member
+        assert len(second) == 15 and all(d.endswith("-20") for d in second), second
+    finally:
+        browser.close()
+        driver.stop()
+
+
+@pytest.mark.parametrize("field", ['<input type="text" aria-label="Statement History">',
+                                   '<input type="checkbox" aria-label="Statement History">'],
+                         ids=["a text field", "a box to tick"])
+def test_a_field_named_statement_history_is_no_panels_link(monkeypatch, field):
+    """Only an input Playwright gives a button's role is a control here, so a
+    text field or a box to tick named like a Statement History is not taken
+    for a panel's, and only the two panels' own are."""
+    driver, browser, pg = _drive(monkeypatch, _swap(_vendor_html(), [
+        ('<div id="panels">', '<div id="panels">' + field)]))
+    try:
+        panels = site.history_panels(pg)
+        assert len(panels) == 2 and pg.locator("[data-paperpull-history]").count() == 2, panels
+    finally:
+        browser.close()
+        driver.stop()
