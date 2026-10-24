@@ -55,7 +55,8 @@ SPEC = AppSpec(
         "delay_min_seconds": 2.5,
         "delay_max_seconds": 5.0,
         "pilot_count": 5,
-        "document_types": ["Statement", "Insurance Document", "Tax Document"],
+        # The two kinds the app lists, as config.example.json names them.
+        "document_types": ["Statement", "Tax Document"],
     },
     base_url="https://myaccount.amfam.com/",
     rules_filename="document_rules.json",

@@ -138,6 +138,39 @@ All notable changes to PaperPull are recorded here. Versioning follows
   Found by a fresh review of the masked-digits fix above, on the link
   shape a tester's recording shows, and proven in a browser before the
   change.
+- **SBA and American Family no longer misfile a document by the two rules
+  their new reading took from its review.** That reading, ported from Wells
+  Fargo, takes a masked number's last digits for the loan's or the
+  policy's, and has a link that names only its date read the part of the
+  page around it. Two fresh reviews of the same rules in the Wells Fargo
+  app found them wrong in these ways. A lone bullet, a lone asterisk or
+  "ending" was taken for a mask, so a 1098 printed as `Loan ...4321 • 1098`
+  beside a link naming only its date was saved as the Loan Statement, and
+  a 1099-C after "Year ending" was left for a person. Three dots, an
+  ellipsis, black circles, middle dots, an en dash or a spaced dash after
+  the mask, and "last four digits" were never taken for one, the last
+  since only sixteen characters before the digits were read, so such a
+  statement was still filed as a Tax Document. The part read around a
+  link passed over tabs and links that name no document, so a lone
+  statement under "Statements" and "Tax forms" tabs was left for a person
+  every run. And that part was taken for the link's entry, so two
+  statements of a day whose controls the reading does not count as
+  documents, links the core finds by their words (#38) or input buttons,
+  became one document, and the first was pressed for both. Now a mask is
+  two or more marks or one directly before the digits, any dash may follow
+  it, "ending" masks only after a loan, a policy, an account or a number,
+  or with "in" or "with" after it, and a number with a form's letters
+  after it, 1099-C or 1099-INT, is always a form, while letters running
+  into the digits from the next word, as two spans touching draw
+  `****1099View`, never make it one. The part read around a link holds no
+  other control or field drawn on the page, so a form's hidden field or an
+  empty anchor does not cut it short, and it is never the link's entry.
+  Both rules only ever leave a document for a person, since the careful
+  reading without them must agree as well, and a document they leave for
+  a person still keeps a twin of its day from being guessed at.
+  Found by two fresh reviews of the Wells Fargo port and one of this
+  change, each shape proven in a browser before the change, the twins on
+  American Family too. No release carried these rules as first written.
 
 ## [0.57.1] - 2026-10-22
 
