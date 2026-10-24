@@ -93,6 +93,7 @@ The tool reads each order's Invoice menu (`/your-orders/invoice/popover?orderId=
 and downloads any invoice PDF it links (`/documents/download/<id>/invoice.pdf`)
 as Amazon issued it, saved as `YYYY-MM-DD Amazon <Category> Invoice.pdf`. An
 order split across sellers can have several, saved as `(1 of 2)`, `(2 of 2)`.
+Review names and Rename give them a new name together, each keeping its part.
 
 Orders with no invoice PDF fall back to Amazon's printable order summary at
 `/gp/css/summary/print.html?orderID=<id>`, rendered with Chromium's

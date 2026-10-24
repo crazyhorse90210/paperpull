@@ -74,6 +74,8 @@ invoice already on file is not saved a second time.
 `category_rules.json` holds editable keyword → category rules. Classification
 is deterministic and fully local. Low-confidence purchases are saved anyway,
 marked *Review Needed*, and can be renamed with `paperpull target review-names`.
+A new name reaches every invoice of an order saved as several, each keeping
+its part, and so does Rename under a new naming pattern.
 
 ## When Target changes its website
 

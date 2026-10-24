@@ -41,6 +41,21 @@ All notable changes to PaperPull are recorded here. Versioning follows
   Found by reading the code and proven in a browser before the change.
   Both apps are still untested, so no archive is known to hold a misfiled
   document.
+- **Every invoice of an order split into several takes a new name
+  together, in every receipt app.** Target and Amazon save each invoice of
+  a split order as a file of its own, "(1 of 2)" and "(2 of 2)", with one
+  index row for the order and the others named in its notes. Review Names
+  and Rename renamed only the file the row names, so a new summary or a
+  new naming pattern left the order's other invoices under the name the
+  order had before. Now both rename every invoice of the order together,
+  each keeping its own part and going into the same pattern folders, and
+  the notes, the rows and Target's list of invoices name them as they are
+  now. An invoice put aside in Manual Review, one whose name says no part,
+  and one that another purchase's rows, record or notes also name keep
+  their names. The next Rename gives an invoice an earlier Review Names
+  left behind the name the rest of its order has, and the Move to a
+  documents folder now takes Amazon's other invoices along, as it already
+  took Target's.
 
 ## [0.57.1] - 2026-10-22
 

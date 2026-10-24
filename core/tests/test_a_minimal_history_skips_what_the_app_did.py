@@ -156,6 +156,11 @@ WALKS_DECIDE_NOTHING = {
             "--minimal carries pdf_path and the list, and an order number a record lacks "
             "is read off its key, which every history carries, so a moved order's record "
             "claims the files it claimed before the move",
+        "renaming._also_saved":
+            "the other invoices of an order its notes name, which Review Names and Rename "
+            "carry with its first. Target's own walk asks _numbers_naming without them, and "
+            "a moved record still names every invoice in its list of invoices, which "
+            "--minimal carries",
     },
 }
 

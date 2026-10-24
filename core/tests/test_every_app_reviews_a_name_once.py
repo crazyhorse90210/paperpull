@@ -740,11 +740,15 @@ def test_a_new_name_follows_into_the_record_s_list_of_invoices(app, spelled, tmp
     for an invoice corrected its rows and pdf_path and left the list naming
     the old file, which Review Names, Rename and Target's own walk all read
     as the order's. Each entry naming a renamed invoice now names it as it
-    is, the one pdf_path names and another alike, and an entry for a file
-    deleted since is left as it was, and an entry spelling its file in
-    another case than the row follows it too, as two spellings of one file
-    are on Windows and macOS. The list is read from the record whatever the
-    app, so every receipt app keeps it right."""
+    is, the one pdf_path names and another renamed with it alike, and an
+    entry for a file deleted since is left as it was, and an entry spelling
+    its file in another case than the row follows it too, as two spellings
+    of one file are on Windows and macOS. The list is read from the record
+    whatever the app, so every receipt app keeps it right. The second
+    invoice has an index row of its own marked for review, which follows
+    it, so it is not asked about again, since an order has one summary. The
+    notes name it as its row spells it, and follow it however the list
+    spells it."""
     import os
     mod = load(app)
     inst = runnable(mod, tmp_path / "out")
@@ -752,6 +756,7 @@ def test_a_new_name_follows_into_the_record_s_list_of_invoices(app, spelled, tmp
     purchase, first, second, entries = invoices_of_an_order(inst, filed, "Unsure Purchase",
                                                             "Low")
     inst.index_csv.append_rows([index_row("ORDER-0001", second)])
+    inst.progress.update(purchase.key, {"notes": "Also saved " + second.name})
     if spelled == "in another case":
         upper = [f.with_name(f.name.upper()) for f in (first, second)]
         if not all(os.path.exists(u) for u in upper):
@@ -759,31 +764,39 @@ def test_a_new_name_follows_into_the_record_s_list_of_invoices(app, spelled, tmp
         entries[:2] = [dict(e, file=str(u)) for e, u in zip(entries, upper)]
         inst.progress.update(purchase.key, {"invoices": entries})
 
+    asked = []
     answers = iter(["Garden Hose", "Lamp"])
-    monkeypatch.setattr(mod, "ask", lambda prompt: next(answers))
+    monkeypatch.setattr(mod, "ask", lambda prompt: asked.append(prompt) or next(answers))
     inst.cmd_review_names()
 
-    garden = [p for p in filed.iterdir() if "Garden Hose" in p.name]
-    lamp = [p for p in filed.iterdir() if "Lamp" in p.name]
-    assert len(garden) == len(lamp) == 1 and not first.exists() and not second.exists(), \
+    garden = sorted(p for p in filed.iterdir() if "Garden Hose" in p.name)
+    assert len(asked) == 1 and not first.exists() and not second.exists(), \
+        sorted(p.name for p in filed.iterdir())
+    assert len(garden) == 2 and all(p.name.endswith(" (%d of 3).pdf" % i)
+                                    for i, p in enumerate(garden, 1)), \
         sorted(p.name for p in filed.iterdir())
     record = json.loads(inst.paths.progress_json.read_text(encoding="utf-8"))[purchase.key]
     assert record["pdf_path"] == str(garden[0])
     assert record["invoices"] == [dict(entries[0], file=str(garden[0])),
-                                  dict(entries[1], file=str(lamp[0])), entries[2]]
+                                  dict(entries[1], file=str(garden[1])), entries[2]]
+    rows = inst.index_csv.read_all()
+    assert [r["PDF Full Path"] for r in rows] == [str(p) for p in garden]
+    assert all("renamed via --review-names" in r["Notes"] for r in rows), rows
+    assert record["notes"] == "Also saved " + garden[1].name, record["notes"]
 
 
 @pytest.mark.parametrize("app", APPS, ids=[a.name for a in APPS])
 @pytest.mark.parametrize("moving", ["the one pdf_path names", "another",
                                     "one the list spells in another case"])
 def test_rename_follows_into_the_record_s_list_of_invoices(app, moving, tmp_path):
-    """Rename moves the invoice an index row names to the name the app gives
-    it today, and corrected the row and pdf_path while the list of invoices
-    kept the old name. The entry follows the file now, when pdf_path names
-    it, when pdf_path names another invoice that stays where it is, and
-    when the list spells the file in another case than the row, as two
-    spellings of one file are on Windows and macOS. The entries of files
-    Rename did not move are left as they were."""
+    """Rename moves every invoice of the order to the name the app gives it
+    today, the one an index row names and the others the list names, and
+    corrected the row and pdf_path while the list of invoices kept the old
+    names. Each entry follows its file now, whether the row names the
+    invoice pdf_path names or another one, and when the list spells the
+    file in another case than the row, as two spellings of one file are on
+    Windows and macOS. The entry of a file deleted since is left as it
+    was."""
     import os
     from paperpull_core import renaming
     mod = load(app)
@@ -807,14 +820,15 @@ def test_rename_follows_into_the_record_s_list_of_invoices(app, moving, tmp_path
     said = []
     renaming.run_for(inst, apply_changes=True, say=said.append)
 
-    moved = [p for p in filed.iterdir() if "Unsure Purchase" in p.name]
-    assert len(moved) == 1 and not target.exists(), said
-    assert {p.name for p in filed.iterdir()} == {moved[0].name, (second, first)[at].name}, said
+    moved = sorted(p for p in filed.iterdir() if "Unsure Purchase" in p.name)
+    assert not target.exists() and not (second, first)[at].exists(), said
+    assert len(moved) == 2 and all(p.name.endswith(" (%d of 3).pdf" % i)
+                                   for i, p in enumerate(moved, 1)), said
+    assert sorted(p.name for p in filed.iterdir()) == [p.name for p in moved], said
     record = json.loads(inst.paths.progress_json.read_text(encoding="utf-8"))[purchase.key]
-    assert record["pdf_path"] == str(moved[0] if at == 0 else first), said
-    want = list(entries)
-    want[at] = dict(entries[at], file=str(moved[0]))
-    assert record["invoices"] == want, said
+    assert record["pdf_path"] == str(moved[0]), said
+    assert record["invoices"] == [dict(entries[0], file=str(moved[0])),
+                                  dict(entries[1], file=str(moved[1])), entries[2]], said
 
 
 def keeps_a_list_of_invoices(tree) -> bool:
