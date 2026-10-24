@@ -27,8 +27,9 @@ before the press as its aria-label or else its text, were not that whole
 name, so its text holds something its name leaves out, a mark hidden from a
 screen reader or a word drawn for one alone. The link's words are now read
 the ways its name is made, and what it shows still has to name statements
-and documents, so a control showing View Check Copies under a name for a
-screen reader alone is still refused.
+and documents, so a control showing View Check Copies under a name put
+there for a screen reader alone, in the usual ways such words are hidden,
+is still refused.
 
 Everything here is invented, and real Chromium is driven against made-up
 pages served at Wells Fargo's own addresses.
@@ -497,6 +498,11 @@ WHOLE_BY_NAME = {
         '<span id="own-name">%s</span><span style="%s"> opens the page</span>' % (NAME, SR_ONLY),
         ' aria-labelledby="own-name"'),
 }
+# Characters of no width, which its name leaves out and its text keeps.
+NO_WIDTH = {
+    "a space of no width": _link("View Statements &amp;&#8203; Documents"),
+    "a soft hyphen": _link("View State&shy;ments &amp; Docu&shy;ments"),
+}
 
 
 @pytest.mark.parametrize("shape", list(WHOLE_BY_NAME))
@@ -513,6 +519,20 @@ def test_a_link_whose_text_holds_more_than_its_name_is_pressed(open_site, shape)
     read = way["documents_link_read"]
     assert read["taken"] is True and read["text_is_whole"] is False, read
     assert read["seen_names_both"] is True and read["words_refused"] is False, read
+
+
+@pytest.mark.parametrize("shape", list(NO_WIDTH))
+def test_a_link_whose_text_holds_characters_of_no_width_is_pressed(open_site, shape):
+    """The 0.57.0 safety review. Found by its whole name, which leaves such
+    characters out, it is read whole once they are taken out of its words
+    too."""
+    fake = Site(_page(menu=_menu(NO_WIDTH[shape])))
+    pg = open_site(fake)
+    way = {}
+    assert site.goto_documents(pg, way=way) is True
+    assert fake.navigations == [EDOCS], fake.navigations
+    assert _pressed(pg) == ["accounts", "documents"], _pressed(pg)
+    assert way["documents_link_read"]["text_is_whole"] is True
 
 
 def test_the_made_up_menu_counts_as_the_testers_menu_did(open_site):
@@ -536,6 +556,10 @@ def test_the_made_up_menu_counts_as_the_testers_menu_did(open_site):
     # The whole name for a screen reader, and words closing an account
     # hidden from one.
     (NAME + '<span aria-hidden="true"> Close an Account</span>', ""),
+    # A label naming the link on a control whose style draws Close an
+    # Account.
+    ('<span class="drawn"></span><style>.drawn::before { content: "Close an Account"; }</style>',
+     ' aria-label="%s"' % NAME),
 ])
 def test_a_link_any_of_whose_words_the_guard_refuses_is_never_pressed(open_site, inner, attrs):
     fake = Site(_page(menu=_menu(_wrong(inner, attrs))))
@@ -575,6 +599,8 @@ UNSEEN = {
     "cut away": '<span style="position:absolute;clip:rect(0 0 0 0);white-space:nowrap">%s</span>',
     "cut away by a path": '<span style="clip-path:inset(50%%)">%s</span>',
     "outside its own box": '<span style="position:absolute;left:-10000px">%s</span>',
+    "see-through": '<span style="opacity:0">%s</span>',
+    "in a color of no strength": '<span style="color:transparent">%s</span>',
 }
 # What such a control shows, hidden from a screen reader. The space before
 # it keeps the words apart, so with any one of the ways above not applied,
@@ -637,7 +663,8 @@ def test_the_failure_file_says_how_the_links_words_read(open_site, tmp_path):
     assert len(stop.facts) <= 20 and report["extra"] == stop.facts, (report["extra"], stop.facts)
     read = report["extra"]["documents_link_read"]
     assert set(read) == {
-        "words_read", "label_given", "labelled_by", "labelled_by_itself", "label_is_whole",
+        "words_read", "label_given", "labelled_by", "labelled_by_itself", "style_given",
+        "label_is_whole",
         "text_is_whole", "said_is_whole", "labelled_is_whole", "seen_names_both",
         "words_refused", "hidden_elements", "text_length", "said_length", "seen_length", "taken"}
     assert read["words_read"] is True and read["label_given"] is False

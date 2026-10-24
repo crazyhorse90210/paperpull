@@ -508,7 +508,7 @@ def _label_of(el) -> str:
         return ""
 
 
-# A control's own words, read five ways for the check before its press.
+# A control's own words, read six ways for the check before its press.
 #
 #   label     its aria-label
 #   text      what it holds as text, innerText, which keeps words put there
@@ -518,8 +518,11 @@ def _label_of(el) -> str:
 #   labelled  the text of the parts aria-labelledby names, only when every
 #             one of them is a drawn part of the control itself, else ""
 #   seen      its text with every part not drawn, drawn under 2 pixels, cut
-#             away or outside the control's own box left out, the ways words
-#             are put there for a screen reader alone
+#             away, outside the control's own box, see-through or in a color
+#             of no strength left out, the ways words are put there for a
+#             screen reader alone
+#   style     what its style draws before and after it and each of its parts,
+#             read only for words the guard refuses
 #
 # A tester's View Statements & Documents in the Accounts menu was found by
 # its name, and its text alone, read again, refused it in both runs (#27).
@@ -530,26 +533,43 @@ _OWN_WORDS_JS = r"""(el) => {
     return s.display === 'none' || s.visibility === 'hidden';
   };
   const unspoken = (e) => e.getAttribute('aria-hidden') === 'true' || notDrawn(e);
+  const strength = (color) => {
+    const m = /rgba?\(([^)]*)\)/.exec(color || '');
+    const p = m ? m[1].split(/[\s,\/]+/).filter(Boolean) : [];
+    return p.length > 3 ? parseFloat(p[3]) : 1;
+  };
+  // A color is passed down to every part, and see-through is not, so the
+  // color is asked of the element holding a text, and see-through of each
+  // part on the way down (unseen).
+  const faint = (e) => strength(getComputedStyle(e).color) === 0;
   const unseen = (e) => {
     if (notDrawn(e)) return true;
     const s = getComputedStyle(e);
+    if (parseFloat(s.opacity) === 0) return true;
     if (s.display === 'contents') return false;
     if ((s.clip && s.clip !== 'auto') || (s.clipPath && s.clipPath !== 'none')) return true;
     const r = e.getBoundingClientRect();
     if (r.width < 2 || r.height < 2) return true;
     return r.right <= box.left || r.left >= box.right || r.bottom <= box.top || r.top >= box.bottom;
   };
-  const read = (node, skip) => {
+  // `shown`, when given, is asked of the element holding a text before
+  // that text is read.
+  const read = (node, skip, shown) => {
     let out = '';
+    const own = !shown || shown(node);
     for (const c of node.childNodes) {
-      if (c.nodeType === Node.TEXT_NODE) out += c.data;
+      if (c.nodeType === Node.TEXT_NODE) { if (own) out += c.data; }
       else if (c.nodeType === Node.ELEMENT_NODE && !skip(c)) {
         const inline = getComputedStyle(c).display.startsWith('inline');
-        out += inline ? read(c, skip) : ' ' + read(c, skip) + ' ';
+        const t = read(c, skip, shown);
+        out += inline ? t : ' ' + t + ' ';
       }
     }
     return out;
   };
+  const style = [el, ...el.querySelectorAll('*')].slice(0, 300)
+    .flatMap((e) => ['::before', '::after'].map((p) => getComputedStyle(e, p).content))
+    .filter((c) => c && c !== 'none' && c !== 'normal').join(' ');
   const ownPart = (p) => {
     if (!p || p === el || !el.contains(p)) return false;
     for (let e = p; e && e !== el; e = e.parentElement) if (unspoken(e)) return false;
@@ -561,22 +581,27 @@ _OWN_WORDS_JS = r"""(el) => {
   const own = parts.length > 0 && parts.every(ownPart);
   return {label: el.getAttribute('aria-label') || '', labelled_by: ids.length > 0,
           labelled: own ? parts.map((p) => read(p, unspoken)).join(' ') : '',
-          text: el.innerText || '', said: read(el, unspoken), seen: read(el, unseen),
+          text: el.innerText || '', said: read(el, unspoken),
+          seen: read(el, unseen, (e) => !faint(e)), style: style,
           hidden_elements: el.querySelectorAll('[aria-hidden=true]').length};
 }"""
-_READINGS = ("label", "text", "said", "labelled", "seen")
+_READINGS = ("label", "text", "said", "labelled", "seen", "style")
 _STATEMENTS_WORD_RE = re.compile(r"\bstatements?\b", re.I)
 _DOCUMENTS_WORD_RE = re.compile(r"\bdocuments?\b", re.I)
+# A soft hyphen and the characters of no width, which a control's name
+# leaves out and its text keeps, so a name that is whole reads whole.
+_NO_WIDTH = dict.fromkeys((0x00AD, 0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF))
 
 
 def _own_words(el) -> Optional[dict]:
-    """A control's own words read five ways (_OWN_WORDS_JS), each with its
-    spaces made single, or None when they cannot be read."""
+    """A control's own words read six ways (_OWN_WORDS_JS), each with the
+    characters of no width taken out and its spaces made single, or None
+    when they cannot be read."""
     try:
         seen = el.evaluate(_OWN_WORDS_JS, timeout=_READ_MS) or {}
     except Exception:
         return None
-    words = {k: " ".join(str(seen.get(k) or "").split()) for k in _READINGS}
+    words = {k: " ".join(str(seen.get(k) or "").translate(_NO_WIDTH).split()) for k in _READINGS}
     words["labelled_by"] = bool(seen.get("labelled_by"))
     try:
         words["hidden_elements"] = int(seen.get("hidden_elements") or 0)
@@ -599,15 +624,18 @@ def _reads_as_documents_link(words: Optional[dict]) -> bool:
     Documents link's, refusing when unsure.
 
     No reading may say anything the guard refuses whatever else it says, so
-    a label naming the link on a control holding Close an Account is
-    refused. A control with a label takes its label, which has to be the
-    link's whole name, as it always did, and one without takes its text
-    when that is the whole name. Otherwise its name read the ways a screen
-    reader makes it, said or labelled by its own parts, has to be the
-    whole name, and what it shows has to name statements and documents, so
-    a mark hidden from a screen reader or a word put there for one alone
-    does not refuse the link, and a control that shows View Check Copies
-    under a name for a screen reader alone is still never taken."""
+    a label naming the link on a control holding or drawing Close an
+    Account is refused. A control with a label takes its label, which has
+    to be the link's whole name, as it always did, and one without takes
+    its text when that is the whole name. Otherwise its name read the ways
+    a screen reader makes it, said or labelled by its own parts, has to be
+    the whole name, and what it shows has to name statements and documents,
+    so a mark hidden from a screen reader or a word put there for one alone
+    does not refuse the link, while a control that shows View Check Copies
+    under a name put there for a screen reader alone, in the ways `seen`
+    leaves out, is still never taken. A page that hides those words some
+    other way, under a part of the control drawn over them say, is not
+    read for it."""
     if not words or any(_refused(words[k]) for k in _READINGS):
         return False
     if words["label"]:
@@ -623,7 +651,8 @@ def _how_the_link_read(words: Optional[dict]) -> dict:
     if not words:
         return {"words_read": False}
     facts = {"words_read": True, "label_given": bool(words["label"]),
-             "labelled_by": words["labelled_by"], "labelled_by_itself": bool(words["labelled"])}
+             "labelled_by": words["labelled_by"], "labelled_by_itself": bool(words["labelled"]),
+             "style_given": bool(words["style"])}
     for k in ("label", "text", "said", "labelled"):
         facts["%s_is_whole" % k] = bool(DOCUMENTS_LINK_RE.match(words[k]))
     facts.update({"seen_names_both": _seen_names_both(words),
