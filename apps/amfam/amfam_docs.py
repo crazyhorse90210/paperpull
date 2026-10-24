@@ -20,8 +20,8 @@ Usage:
 Filters: --year YYYY  --start-date YYYY-MM-DD  --end-date YYYY-MM-DD
          --max-docs N  --type Statement|"Tax Document"
 
-READ-ONLY: this tool only reads the Statements & Documents page and saves the PDFs American Family
-already generated. It never transfers, pays, sends money, opens
+READ-ONLY: this tool only reads Billing & Payments and each bill's Bill details, and saves the
+PDFs American Family already generated. It never transfers, pays, sends money, opens
 or closes anything, or changes any account setting. Everything stays on this machine; nothing is
 sent to any external service.
 """
@@ -344,14 +344,13 @@ class App:
             print("Connected, but American Family shows a signed-out page.")
             print("Sign in in the open browser window (keep it OPEN), then re-run --login.")
         elif ok:
-            print("Success: connected and the Documents page is visible.")
+            print("Success: connected and Billing & Payments is visible.")
             print("Keep that browser window OPEN, then run the diagnostics or pilot.")
         else:
-            print("Connected, but the Documents list did not load, so this cannot say")
+            print("Connected, but Billing & Payments did not load, so this cannot say")
             print("whether you are signed in. Look at the browser window and answer")
             print("anything American Family asks there yourself. If it shows your")
-            print("account, open your Documents/Statements page in it, then run")
-            print("--diagnose.")
+            print("account, open Billing & Payments in it, then run --diagnose.")
         self.close()
 
     def _in_scope(self, doc: Document) -> bool:
@@ -450,8 +449,9 @@ class App:
         listing.started(self)
         page = self.page()
         n_new = 0
-        # Open the Statements & Documents page and read the date from every control that
-        # fetches a statement or a tax document.
+        # Open Billing & Payments and read the date from every control that
+        # fetches a statement or a tax document, each bill's behind its Bill
+        # details.
         if not site.goto_documents(page):
             self.check_session(page)
             site.goto_documents(page)
@@ -461,7 +461,7 @@ class App:
         for r in docs:
             n_new += self._record_rawdoc(r, site.BILLING_URL)
         self.discovery.save()
-        log.info("Statements & Documents page: %d documents, %d new", len(docs), n_new)
+        log.info("Billing & Payments: %d documents, %d new", len(docs), n_new)
         if refused:
             # A bill was left alone. The reasons are the site layer's own
             # sentences, the first named and every one listed beside it.
@@ -595,7 +595,7 @@ class App:
         if out_path.name != filename:
             self.stats["duplicate_filenames"] += 1
 
-        # Open the Statements & Documents page and let the site layer find and fetch this one.
+        # Open Billing & Payments and let the site layer find and fetch this one.
         if not site.goto_documents(page):
             self.check_session(page)
             site.goto_documents(page)
@@ -983,7 +983,7 @@ class App:
             stopped=stopped or getattr(self, "_diagnose_stopped", None))
 
     def cmd_diagnose(self):
-        """Survey the Statements & Documents page and write a file a tester can attach to
+        """Survey Billing & Payments and write a file a tester can attach to
         the GitHub issue. No screenshot, digit runs masked, JSON bodies as
         shape only. Nothing is downloaded. All it presses are Escape and End,
         a button that closes or dismisses something drawn over the page, a
@@ -1071,7 +1071,7 @@ class App:
         print("  in it that is not on PaperPull's fixed list is written as its")
         print("  shape, a for a letter and 9 for a digit, so it can be attached")
         print("  too. Read it through first.")
-        print(f"Documents page found: {shape_tree(info.get('documents_page_found', '?'), words)}, "
+        print(f"Billing & Payments found: {shape_tree(info.get('documents_page_found', '?'), words)}, "
               f"documents recognized: {len(info.get('documents_recognized', []))}, "
               f"rows: {shape_tree(info.get('rows_collected', '?'), words)}")
         print("Look through that file for anything you would not want public,")
@@ -1140,7 +1140,7 @@ def build_parser() -> argparse.ArgumentParser:
             ("resume", "continue an interrupted run"),
             ("verify", "re-validate every saved PDF"),
             ("rename", "rename downloaded files to this app's current naming"),
-            ("diagnose", "dump the Documents page structure (no downloads)"),
+            ("diagnose", "dump the structure of Billing & Payments (no downloads)"),
             ("record", "record your own path to a document, so this app can be repaired (downloads nothing)"),
             ]:
         ap.add_argument(f"--{name}", action="store_true", help=help_text)

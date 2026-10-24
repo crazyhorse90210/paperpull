@@ -10,27 +10,28 @@ signed-in site. On a first run it is deliberately cautious:
 
   * --login opens a real Edge or Chrome at myaccount.amfam.com, whose
     sign-in is the user's to complete.
-  * --diagnose surveys whatever the documents and billing pages turn out
-    to be, records their headings, their controls with the guard's verdict
-    on each, and the shape of every JSON response, with digit runs
-    masked, and takes no screenshot. That file is what a tester attaches
-    to the GitHub issue.
-  * --discover reads dates from any control that looks like a bill,
-    statement, policy document, declarations page or ID card, wherever it
-    sits on the page.
+  * --diagnose surveys Billing & Payments, what each bill's Bill details
+    shows and the few pages a documents link leads to, records their
+    headings, their controls with the guard's verdict on each, and the
+    shape of every JSON response, with digit runs masked, and takes no
+    screenshot. That file is what a tester attaches to the GitHub issue.
+  * --discover reads Billing & Payments and what each bill's Bill details
+    shows, and lists the billing statements and any tax form listed with
+    them. Policy documents, declarations pages, ID cards and notices are
+    left alone.
   * --pilot tries to save the newest few, by fetching a PDF link the row
     carries from inside the page, or by clicking the row's own control and
     catching a download event, a PDF response or a new tab.
 
-The guesses that most need confirming from a survey are marked GUESS. The
-routes are the biggest one. My Account is a single-page app, and its
-documents and billing views may sit under paths the first survey has to
-find from the page's own links.
+The guesses that most need confirming from a survey are marked GUESS.
+Billing & Payments (/billing) and its statementPDF links are recorded from
+a tester's run (#45). Where a bill's Bill details leads, a list in place or
+another route, is what the next survey most needs to show.
 
 SAFETY (this is an insurance account with a payment method on file):
-  This module is strictly READ-ONLY. It opens the documents and billing
-  pages, reads the lists, and saves the PDFs American Family already
-  generated. It must NEVER activate any control that pays, sets up
+  This module is strictly READ-ONLY. It opens Billing & Payments and each
+  bill's Bill details, reads the lists, and saves the PDFs American Family
+  already generated. It must NEVER activate any control that pays, sets up
   autopay, files or reports a claim, changes coverage, adds or removes a
   vehicle, driver or policy, starts a quote, cancels or renews a policy,
   or edits any setting. FORBIDDEN_CONTROL_RE is the guard. A control must
