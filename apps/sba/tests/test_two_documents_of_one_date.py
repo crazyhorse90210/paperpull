@@ -785,20 +785,39 @@ def test_a_long_entry_is_still_dated(page):
 # Finding a second document of a day, the port filed each of these under a
 # kind it is not, where the code before it found only the first.
 
-MASKED_ROW = ("<tr data-guid='r-masked'><td>01/31/2026</td><td>Loan statement</td><td>Loan ****1099</td>"
+# A loan's statement, its masked number printed in a cell of its own.
+MASKED_ROW = ("<tr data-guid='r-masked'><td>01/31/2026</td><td>Loan statement</td><td>%s</td>"
               "<td><a href='#' data-guid='g-masked'>View</a></td></tr>")
+# The same, its masked number in the link's own words.
+MASKED_LINK_ROW = ("<tr data-guid='r-masked'><td>01/31/2026</td><td><a href='#' data-guid='g-masked'>"
+                   "View statement, loan ending 1099</a></td></tr>")
 
 
-def test_a_statement_of_a_loan_ending_1099_is_never_filed_as_a_tax_form(page, presses, tmp_path):
-    """The loan's masked number ends in 1099, and both readings took those
-    digits for the form, so its statement was filed as a Tax Document,
-    alone or beside another loan's statement of the day. Read with care
-    they are the loan's, the two readings disagree, and it is left for a
-    person."""
-    page.set_content(_page(MASKED_ROW))
+@pytest.mark.parametrize("row", [MASKED_ROW % loan for loan in (
+    "Loan ****1099", "Loan ... 1098", "Loan … 1099", "Loan •••• 1099",
+    "Loan XXXX-1098", "Loan #1099", "EIDL ending in 1099", "Disaster Loan ending 1098",
+    "Last four digits 1099", "Loan ●●●● 1099", "Loan ···· 1099",
+    "Loan XXXX–1099", "Loan **** - 1099", "Loan ending - 1098", "Disaster Loan *1099",
+    "Loan ****1099-EIDL")]
+    + [MASKED_LINK_ROW],
+    ids=["asterisks", "dots", "an ellipsis", "bullets", "x's", "a number sign", "ending in", "a loan ending",
+         "last four", "black circles", "middle dots", "x's and an en dash", "asterisks and a dash",
+         "ending and a dash", "one asterisk", "a program's name after the digits", "in the link's own words"])
+def test_a_statement_of_a_loan_ending_1099_is_never_filed_as_a_tax_form(page, presses, tmp_path, row):
+    """The loan's masked number ends in 1099 or 1098, and both readings took
+    those digits for the form, so its statement was filed as a Tax
+    Document, alone or beside another loan's statement of the day. Read
+    with care they are the loan's, the two readings disagree, and it is
+    left for a person. Three dots, an ellipsis, black circles, middle dots,
+    a dash other than a hyphen after a mask and "last four digits" masked
+    nothing as first ported, the last since only sixteen characters before
+    the digits were read (fresh reviews of the Wells Fargo port). And a
+    loan's program named after a dash, ****1099-EIDL, was taken for a
+    form's letters (fresh review of this port)."""
+    page.set_content(_page(row))
     docs = site.collect_download_docs(page)
     assert _found(docs) == [] and docs.unsure == 1
-    page.set_content(_page(STATEMENT_ROW, MASKED_ROW))
+    page.set_content(_page(STATEMENT_ROW, row))
     docs = site.collect_download_docs(page)
     assert _found(docs) == [(DAY, "statement", STATEMENT)] and docs.unsure == 1
     saved, trace = _download(page, tmp_path, TAX)
@@ -806,26 +825,273 @@ def test_a_statement_of_a_loan_ending_1099_is_never_filed_as_a_tax_form(page, pr
     assert _refusals(trace) == ["no control of this date is this kind of document"], trace
 
 
-@pytest.mark.parametrize("entry", ["div", "div role='listitem'", "article"],
-                         ids=["a block", "a list item by role", "an article"])
+# A 1099-C's link, naming only its date, for a screen reader.
+DATED_BY_NAME_LINK = "<a href='#' data-guid='g-1099c' aria-label='Download PDF January 31, 2026'>PDF</a>"
+
+
+@pytest.mark.parametrize("form", [
+    "<div>Form 1099-C %s</div>" % DATED_BY_NAME_LINK,
+    "<div role='listitem'>Form 1099-C %s</div>" % DATED_BY_NAME_LINK,
+    "<article>Form 1099-C %s</article>" % DATED_BY_NAME_LINK,
+    "<div>Form 1099-C <span>%s</span></div>" % DATED_BY_NAME_LINK,
+], ids=["a block", "a list item by role", "an article", "a link in a part of its own"])
 def test_a_form_dated_only_by_its_name_takes_its_kind_from_its_own_part_of_the_page(page, presses,
-                                                                                   tmp_path, entry):
+                                                                                   tmp_path, form):
     """A 1099-C's link names only its date, for a screen reader, and the
     form's name is printed beside it. No table row or list item holds it,
     so nothing around it was read and it was filed as a statement, alone or
     after the day's 1098. The part of the page holding it and no other
     control is read now, it names a tax form where the old reading of the
     link's name says statement, and it is left for a person."""
-    tag = entry.split()[0]
-    form = ("<%s>Form 1099-C <a href='#' data-guid='g-1099c' aria-label='Download PDF January 31, 2026'>"
-            "PDF</a></%s>" % (entry, tag))
     page.set_content(_blocks(form))
     docs = site.collect_download_docs(page)
     assert _found(docs) == [] and docs.unsure == 1
-    page.set_content(_blocks("<%s>Form 1098 01/31/2026 <a href='#' data-guid='g-1098'>Download 1098</a></%s>"
-                             % (entry, tag), form))
+    page.set_content(_blocks("<div>Form 1098 01/31/2026 <a href='#' data-guid='g-1098'>Download 1098</a></div>",
+                             form))
     docs = site.collect_download_docs(page)
     assert _found(docs) == [(DAY, "tax", TAX)] and docs.unsure == 1
     saved, trace = _download(page, tmp_path, STATEMENT)
     assert not saved and presses == [], (presses, trace)
     assert _refusals(trace) == ["no control of this date is this kind of document"], trace
+
+
+def test_a_link_dated_only_by_its_name_reads_no_words_it_shares_with_other_documents(page):
+    """Statement links naming only their dates, each in a part of its own,
+    under tabs that name statements and tax forms. The words around a link
+    are read only as far as the part that holds it alone, so the tabs, which
+    every document of the list shares, leave neither unsure, and both are
+    filed as the code before filed them."""
+    page.set_content(_blocks("<div><div role='tablist'><button>Statements</button> <button>Tax forms</button></div>"
+                             "<div><a href='#' data-guid='g-january' aria-label='Download PDF January 31, 2026'>"
+                             "PDF</a></div>"
+                             "<div><a href='#' data-guid='g-december' aria-label='Download PDF December 31, 2025'>"
+                             "PDF</a></div></div>"))
+    docs = site.collect_download_docs(page)
+    assert _found(docs) == [("2025-12-31", "statement", "Loan Statement - December 31, 2025"),
+                            (DAY, "statement", STATEMENT)] and docs.unsure == 0
+
+
+@pytest.mark.parametrize("control", [
+    "<a href='#' data-guid='%s' aria-label='Statement January 31, 2026'>PDF</a>",
+    "<a href='#' data-guid='%s' aria-label='Download PDF January 31, 2026'>PDF</a>",
+    "<input type='button' data-guid='%s' value='PDF' aria-label='View statement January 31, 2026'>",
+], ids=["found by their words", "found by their names", "input buttons"])
+def test_two_statements_dated_only_by_their_names_stay_two_entries(page, presses, tmp_path, control):
+    """Two loans' statements of one day, each a control that says PDF and
+    names only its date for a screen reader, each in a part of the page of
+    its own, under a heading. Named "Statement" and a date, no control's
+    name says it fetches a document, so the core finds them by their words
+    (#38), and neither is another document control to the other here, nor
+    is a button drawn as an input. What is read around each for its kind
+    then reaches the heading, and taken for their entry it made the two one
+    document, and the first was pressed for both. Each entry is still the
+    control alone, as before the part around it was read, so the two are
+    refused rather than guessed at (fresh review of the Wells Fargo
+    port)."""
+    page.set_content(_blocks("<div><h3>Statements</h3><div>%s</div><div>%s</div></div>"
+                             % (control % "g-disaster", control % "g-express")))
+    assert [(d.title, d.rows) for d in site.collect_download_docs(page)] == [(STATEMENT, 2)]
+    saved, trace = _download(page, tmp_path, STATEMENT)
+    assert not saved and presses == [], (presses, trace)
+    assert _refusals(trace) == [TWO_ROWS], trace
+
+
+# --- the shapes the fresh reviews of the Wells Fargo port found -----------------
+#
+# The two rules the review of this port brought went into the Wells Fargo
+# app as well, and two fresh reviews there found these shapes, each one this
+# app read the same way. The last digits of a masked number were taken for
+# the loan's after a lone bullet or "ending", a link with nothing around it
+# read the tabs and menus of the page, and each rule alone could file a
+# control the reading before it had left for a person, or leave its twin
+# unrefused. Each shape here is held to the answer the code before these
+# rules gave.
+
+BULLET, ELLIPSIS, EN_DASH = chr(0x2022), chr(0x2026), chr(0x2013)
+
+
+@pytest.mark.parametrize("words", ["Loan ...4321 %s 1098" % BULLET,
+                                   "Disaster Lo%s 1099-C" % ELLIPSIS,
+                                   "Disaster loan %s 1099-C" % BULLET],
+                         ids=["after a bullet", "after a cut nickname", "after a loan's name and a bullet"])
+def test_a_form_named_after_a_bullet_or_an_ellipsis_is_never_filed_as_a_statement(page, presses, tmp_path,
+                                                                                   words):
+    """A form's name printed after a bullet or a nickname cut short, beside
+    a link naming only its date. The bullet was taken for a mask, so the
+    form was no form, the link read as a statement both ways and the 1098
+    was saved as the day's statement, and beside the day's real statement
+    the two were refused as twins. A lone bullet masks nothing, and a number
+    with letters after it is a form's name."""
+    form = "<tr data-guid='r-form'><td>%s</td><td>%s</td></tr>" % (
+        words, "<a href='#' data-guid='g-form' aria-label='Download PDF January 31, 2026'>PDF</a>")
+    page.set_content(_page(form))
+    docs = site.collect_download_docs(page)
+    assert _found(docs) == [] and docs.unsure == 1
+    saved, trace = _download(page, tmp_path, STATEMENT)
+    assert not saved and presses == [], (presses, trace)
+    page.set_content(_page(STATEMENT_ROW, form))
+    assert [(d.title, d.rows) for d in site.collect_download_docs(page)] == [(STATEMENT, 1)]
+    saved, trace = _download(page, tmp_path, STATEMENT)
+    assert saved and presses == ["g-statement"], (presses, trace)
+
+
+@pytest.mark.parametrize("content", [
+    _blocks("<a href='#' data-guid='g-tax'>Jan 31, 2026 %s 1099-C (PDF)</a>" % BULLET),
+    _page("<tr><td>Year ending 01/31/2026</td><td>1099-C</td><td><a href='#' data-guid='g-tax'>View</a></td></tr>"),
+    _page("<tr><td>Year ending 01/31/2026</td><td>1098</td><td><a href='#' data-guid='g-tax'>View</a></td></tr>"),
+] + [_page("<tr><td>01/31/2026</td><td>%s</td><td><a href='#' data-guid='g-tax'>View</a></td></tr>" % words)
+     for words in ("Mortgage interest %s 1098" % BULLET, "Disaster Lo%s 1099-C" % ELLIPSIS,
+                   "Disaster Lo%s 1098" % ELLIPSIS, "Economic Injury Disaster Lo%s 1099" % ELLIPSIS,
+                   "Disaster Lo%s 1099%sC" % (ELLIPSIS, EN_DASH), "Mortgage Interest Information... 1098",
+                   "Loan ... 1099-C", "Loan ... 1099%sC" % EN_DASH)],
+    ids=["a link naming a 1099-C after a bullet", "a 1099-C after a year ending", "a 1098 after a year ending",
+         "a 1098 after a bullet", "a 1099-C after a cut nickname", "a 1098 after a cut name",
+         "a 1099 after a cut name", "a 1099-C with an en dash after a cut name",
+         "a 1098 after three dots ending a word", "a 1099-C after dots", "a 1099-C with an en dash after dots"])
+def test_a_form_named_after_a_bullet_a_period_or_an_ellipsis_is_still_a_tax_form(page, content):
+    """Each was filed as a tax form before, and taken for a masked number's
+    digits it was left for a person every run. A period's "ending" is no
+    loan's, and the dates the careful reading leaves out had put it just
+    before the form. Dots right after a letter cut a name short, and a
+    form's name stays a form's name after dots."""
+    page.set_content(content)
+    assert _found(site.collect_download_docs(page)) == [(DAY, "tax", TAX)]
+
+
+@pytest.mark.parametrize("content, title, kept", [
+    (_blocks("<section><p>Tax forms are listed under Tax Documents.</p>"
+             "<div><a href='#' data-guid='g-statement' aria-label='Download PDF January 31, 2026'>PDF</a></div>"
+             "</section><section><div><input type='checkbox' aria-label='Select'> Form 1098 "
+             "<a href='#' data-guid='g-1098' aria-label='Download PDF January 31, 2026'>PDF</a></div></section>"),
+     STATEMENT, (STATEMENT, 2)),
+    (_page("<tr><td>01/31/2026</td><td>Loan statement</td><td>Loan %s 1099</td>"
+           "<td><a href='#' data-guid='g-statement'>View</a></td></tr>" % (BULLET * 4),
+           "<tr><td>01/31/2026</td><td>Form 1098</td><td><a href='#' data-guid='g-1098'>View</a></td></tr>"),
+     TAX, (TAX, 2)),
+], ids=["a statement unsure for the words near it", "a statement unsure for its masked number"])
+def test_a_document_the_two_rules_leave_unsure_still_stops_its_twin(page, presses, tmp_path, content, title,
+                                                                   kept):
+    """The rules leave a statement for a person, and a control of the same
+    day that reads as its kind both ways, a 1098 whose own part holds a box
+    to tick, or the day's 1098 beside a statement taken for a tax form
+    before, was then alone of its date and kind and was pressed for it. The
+    code before refused both as two rows, and so does this one, since a
+    control only the rules leave unsure is still an entry of what it was."""
+    page.set_content(content)
+    assert [(d.title, d.rows) for d in site.collect_download_docs(page)] == [kept]
+    saved, trace = _download(page, tmp_path, title)
+    assert not saved and presses == [], (presses, trace)
+    assert _refusals(trace) == [TWO_ROWS], trace
+
+
+def test_a_document_the_two_rules_leave_unsure_stops_no_other_kind_or_day(page, presses, tmp_path):
+    """A loan's statement the masked-digits rule leaves unsure is held as
+    the tax form both readings took it for before, so it stops only a tax
+    form of its own day. The day's statement and a 1098 of another day are
+    each pressed, as the code before pressed them."""
+    page.set_content(_page(MASKED_ROW % "Loan ****1099", STATEMENT_ROW,
+                           "<tr><td>12/31/2025</td><td>Form 1098</td>"
+                           "<td><a href='#' data-guid='g-older-tax'>Download 1098</a></td></tr>"))
+    saved, trace = _download(page, tmp_path, STATEMENT)
+    assert saved and presses == ["g-statement"], (presses, trace)
+    presses.clear()
+    saved, trace = _download(page, tmp_path, "Tax Document - December 31, 2025", iso="2025-12-31")
+    assert saved and presses == ["g-older-tax"], (presses, trace)
+
+
+def test_a_control_unsure_of_its_date_is_no_entry_of_any_date(page, presses, tmp_path):
+    """The 1098 beside a dated statement link takes the link's date read the
+    old way and no date read with care, so it is left for a person, as it
+    was before the two rules. Only a control the two rules alone leave
+    unsure is held as an entry, so the day's 1098 in a row of its own is
+    pressed, as the code before pressed it."""
+    page.set_content(_page("<tr><td><a href='#' data-guid='g-statement'>Statement 01/31/2026 (PDF)</a></td>"
+                           "<td><a href='#' data-guid='g-undated'>Download 1098</a></td></tr>", TAX_ROW))
+    saved, trace = _download(page, tmp_path, TAX)
+    assert saved and presses == ["g-tax"], (presses, trace)
+
+
+@pytest.mark.parametrize("content", [
+    "<ul><li>Loan ****1099 <a href='#' data-guid='g-x' aria-label='Download PDF January 31, 2026'>PDF</a>"
+    "</li></ul>" + LISTENER,
+    _blocks("<div>Form 1098 <a href='#' data-guid='g-x' aria-label='Download PDF Taxable interest January 31, 2026'>"
+            "PDF</a></div>"),
+], ids=["a masked number beside a link naming its date", "a form beside a link the old reading calls tax"])
+def test_the_two_rules_never_file_what_the_reading_before_them_left_for_a_person(page, content):
+    """The old reading reads only a name that holds its date. Read with care
+    as before, the masked digits named a form, and the link said no kind,
+    so both were left for a person. With either rule alone the careful
+    reading came to agree with the old one, and the first was filed as a
+    statement, the second as a tax form. The careful reading without the
+    rules must agree too."""
+    page.set_content(content)
+    docs = site.collect_download_docs(page)
+    assert _found(docs) == [] and docs.unsure == 1
+
+
+@pytest.mark.parametrize("chrome", [
+    "<div role='tablist'><button>Statements</button> <button>Tax forms</button></div>",
+    "<div><div role='tab'>Statements</div> <div role='tab'>Tax forms</div></div>",
+    "<nav><a href='#'>Tax Center</a></nav>",
+], ids=["tab buttons", "tabs by role", "a menu link"])
+def test_a_lone_link_dated_only_by_its_name_reads_no_tabs_menus_or_links_around_it(page, presses, tmp_path,
+                                                                                   chrome):
+    """A statement alone on its page, its link naming only its date, under
+    tabs or a menu that name tax forms. Read as far as six levels up, the
+    tabs made it a tax form read with care, and it was left for a person
+    every run. The part read around a link holds no other control."""
+    page.set_content(_blocks("<div>%s<div><a href='#' data-guid='g-x' aria-label='Download PDF January 31, 2026'>"
+                             "PDF</a></div></div>" % chrome))
+    docs = site.collect_download_docs(page)
+    assert _found(docs) == [(DAY, "statement", STATEMENT)] and docs.unsure == 0
+    saved, trace = _download(page, tmp_path, STATEMENT)
+    assert saved and presses == ["g-x"], (presses, trace)
+
+
+# --- the shapes the fresh review of this port found ------------------------------
+#
+# Ported as the Wells Fargo app has them, the two rules saved these where the
+# reading they replace left them for a person. Letters running into a masked
+# number from the next word were taken for a form's name, and a control
+# nobody sees cut short the part read around a link. Each is held to the
+# answer of the reading before.
+
+@pytest.mark.parametrize("control", [
+    "<button data-guid='g-masked'><span>Loan ****1099</span><span>View statement</span></button>",
+    "<a href='#' data-guid='g-masked'><span>EIDL ****1099</span><span>PDF</span></a>",
+    "<a href='#' data-guid='g-masked'><span>Loan %s1099</span><span>Statement PDF</span></a>" % (BULLET * 4),
+], ids=["a button", "a link that says PDF", "bullets"])
+def test_a_masked_number_running_into_the_control_s_words_is_still_the_loan_s(page, presses, tmp_path,
+                                                                              control):
+    """The control prints the loan's masked number and its own words in two
+    spans with nothing between them, as a page drawn in parts often does, so
+    its words read "Loan ****1099View statement". Any letter after the digits
+    was taken for a form's name, so they were the form's, and the statement
+    was saved as the day's Tax Document. Only a form's letters name a form,
+    so the statement is left for a person, as the reading before left it."""
+    page.set_content(_page("<tr><td>01/31/2026</td><td>%s</td></tr>" % control))
+    docs = site.collect_download_docs(page)
+    assert _found(docs) == [] and docs.unsure == 1
+    saved, trace = _download(page, tmp_path, TAX)
+    assert not saved and presses == [], (presses, trace)
+
+
+@pytest.mark.parametrize("part", [
+    "<div><span>Form 1098</span> <form action='#'><input type='hidden' name='id' value='7'>%s</form></div>",
+    "<div><a id='y2026'></a><span>Form 1098</span> <div>%s</div></div>",
+    "<div><span>Form 1098</span> <button style='visibility:hidden'>Remove</button> <div>%s</div></div>",
+], ids=["a hidden field of a form around it", "an empty anchor", "a control shown only on hover"])
+def test_a_control_nobody_sees_does_not_cut_short_what_a_button_reads(page, presses, tmp_path, part):
+    """A 1098's button names only its date, beside the form's name, inside a
+    form whose hidden field carries the row's number, beside an empty
+    anchor, or beside a control the page shows only on hover. Taken for
+    another control, each cut short the part read around the button, so it
+    read as a statement both ways and the 1098 was saved as the day's
+    statement. None is drawn on the page, so the form's name is read and
+    the 1098 is left for a person, as the reading before left it."""
+    page.set_content(_blocks(part % ("<button data-guid='g-1098' aria-label='Download PDF January 31, 2026'>"
+                                     "PDF</button>")))
+    docs = site.collect_download_docs(page)
+    assert _found(docs) == [] and docs.unsure == 1
+    saved, trace = _download(page, tmp_path, STATEMENT)
+    assert not saved and presses == [], (presses, trace)

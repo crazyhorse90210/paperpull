@@ -881,6 +881,20 @@ def _statement_date(name: str, row_text: str, row_flat: str = "") -> Optional[st
 # the control is counted and left alone, so nothing is filed under a kind
 # or a date the old reading would not have given it either.
 #
+# The review of this port found two more shapes it filed as the wrong kind,
+# the bill of a policy whose masked number ends in 1099, and a 1099 whose
+# statementPDF link names only its date with nothing around it to read. So
+# the careful reading of a kind takes a masked number's last digits for the
+# policy's, and a control with nothing around it reads the part of the page
+# that holds it alone. Two fresh reviews of those rules in the Wells Fargo
+# app found that each rule alone filed documents the reading before it had
+# left for a person, a 1099 printed after a bullet as the day's statement
+# among them, and that a control they left for a person no longer stopped
+# its twin. So its kind is also read with care without those two rules, and
+# a control is a document only where that reading agrees too. And a control
+# only the rules leave for a person is still an entry of the date and kind
+# it was filed as, so a twin it stopped is still refused.
+#
 # The kinds are the two this app has ever listed, a tax form, in the words
 # of _A_TAX_FORM_RE, and a statement, a bill or a billing statement. Any
 # other kind of document an insurer sends, an ID card, a declarations page,
@@ -888,21 +902,42 @@ def _statement_date(name: str, row_text: str, row_flat: str = "") -> Optional[st
 # (_row_names_a_statement, _marked_row_refuses).
 _A_STATEMENT_KIND_RE = re.compile(r"\b(bills?|statements?)\b", re.I)
 # What comes just before the last digits of a masked policy or account
-# number, ****1099, a run of bullets or x's, or "ending in". Those digits are
-# that number's, never a form's, and the bill of a policy ending 1099 was
-# filed as a tax form (review of this port).
-_MASKED_RE = re.compile(r"(?:[*#%s]+|x{2,})[\s.-]?$|\b(?:ending|ends)(?:\s+in)?\s*$|"
-                        r"\blast\s+(?:four|4)(?:\s+digits)?\s*$" % chr(0x2022), re.I)
+# number, ****1099, three dots or an ellipsis, a run of bullets, dots or
+# x's, a number sign, "ending in" or "policy ending". Those digits are that
+# number's, never a form's, and the bill of a policy ending 1099 was filed
+# as a tax form (review of this port). A lone bullet or asterisk with a
+# space after it is a separator between words, "ending" alone ends a
+# period, as in "Year ending 12/31/2025", and dots right after a letter cut
+# a name short, as in "Whole Life Pol... 1099", so none of them masks what
+# follows. And a number with a form's letters after it, 1099-INT, is a
+# form's name whatever comes before it (fresh reviews of the Wells Fargo
+# port). Other letters run into the number from the next word, where two
+# spans touch, and leave a mask a mask (fresh review of this port).
+_DOTS = chr(0x2022) + chr(0x25CF) + chr(0x00B7)
+_DASHES = "".join(chr(c) for c in range(0x2010, 0x2016)) + r"\-"
+_MASKED_RE = re.compile(
+    r"(?:(?:[*%(dots)s]{2,}|#|(?<![a-z])(?:\.{3}|%(ellipsis)s)|x{2,})\s*[.%(dashes)s]?\s*|[*%(dots)s])$|"
+    r"\b(?:account|acct|policy|number|no)\.?\s+(?:ending|ends)(?:\s+(?:in|with))?\s*[:%(dashes)s]?\s*$|"
+    r"\b(?:ending|ends)\s+(?:in|with)\s*[:%(dashes)s]?\s*$|"
+    r"\blast\s+(?:four|4)(?:\s+digits)?\s*[:%(dashes)s]?\s*$"
+    % {"dots": _DOTS, "ellipsis": chr(0x2026), "dashes": _DASHES}, re.I)
+_FORM_SUFFIXES = ("A", "B", "C", "CAP", "DA", "DIV", "E", "ESA", "F", "G", "H", "INT", "K", "LS", "LTC", "MA",
+                  "MISC", "NEC", "OID", "PATR", "Q", "QA", "R", "S", "SA", "SB", "T")
+_FORM_NAME_RE = re.compile(r"[%s]?(?:%s)(?![a-z])" % (_DASHES, "|".join(_FORM_SUFFIXES)), re.I)
 
 
 def _names_a_tax_form(words: str) -> bool:
     """Whether `words` name a tax form, read with care (_A_TAX_FORM_RE),
-    never by the last digits of a masked number."""
+    never by the last digits of a masked number. The words before the
+    digits are read whole, since "last four digits " is longer than the
+    sixteen characters read before (fresh review of the Wells Fargo
+    port)."""
     for m in _A_TAX_FORM_RE.finditer(words):
-        if m.group(1) and _MASKED_RE.search(words[max(0, m.start() - 16):m.start()]):
+        if m.group(1) and not _FORM_NAME_RE.match(words, m.end()) and _MASKED_RE.search(words, 0, m.start()):
             continue
         return True
     return False
+
 
 # The words a document's title starts with, by its kind. Discovery writes
 # the title from these, and the download reads the kind back out of it.
@@ -921,7 +956,7 @@ def kind_of_title(title: str) -> Optional[str]:
     return None
 
 
-def _kind_of(own: str, chain) -> str:
+def _kind_of(own: str, chain, names_a_form=_names_a_tax_form) -> str:
     """Which kind of document a control fetches, read with care. What its
     own words name, a tax form or a statement. Otherwise the nearest words
     around it that name a kind, so an entry printing "Billing statement" is
@@ -930,13 +965,14 @@ def _kind_of(own: str, chain) -> str:
     every other document control's part left out, so a 1099's control
     beside a statement's says nothing of the statement. With no such words
     it is a statement, as it always was, and as the site's statementPDF
-    mark says."""
-    if _names_a_tax_form(own):
+    mark says. `names_a_form` says whether words name a tax form, by
+    default never by a masked number's last digits."""
+    if names_a_form(own):
         return "tax"
     if _A_STATEMENT_KIND_RE.search(own):
         return "statement"
     for words in chain:
-        if _names_a_tax_form(words):
+        if names_a_form(words):
             return "tax"
         if _A_STATEMENT_KIND_RE.search(words):
             return "statement"
@@ -961,18 +997,28 @@ def _kind_of(own: str, chain) -> str:
 # prints words of its own outside any part holding a document control, so a
 # menu of View and Download is never an entry but each of two bills under
 # one date is. Without that it is the row, and without a row the control's
-# list item, or else the part of the page that holds the control and no
-# other document control, up to six levels up, or the control alone. "up"
-# numbers what holds the entry, so a part of an entry is known to be inside
-# it.
+# list item, or the control alone. "up" numbers what holds the entry, so a
+# part of an entry is known to be inside it.
 #
 # "own" is the control's visible text. "chain" is what each element around
-# it prints of its own, nearest first, up to the row, or the part that holds
-# the control alone, leaving out any part that holds another document
-# control and every date. They say what kind of document the control
-# fetches, so a form's name printed beside a link that names only its date
-# says what the link fetches (review of this port). The numbers are kept in
-# a map on the page's window and nothing is written into the page.
+# it prints of its own, nearest first, up to the row, leaving out any part
+# that holds another document control and every date. They say what kind
+# of document the control fetches. A control with no row or list item
+# around it reads up to the part of the page that holds it and no other
+# control or field drawn on the page, a statementPDF link among them, up to
+# six levels up, so a form's name printed beside a link that names only its
+# date says what the link fetches (review of this port). Tabs, menus and
+# links of the page around it are never read, since "Tax forms" on a tab
+# left a lone statement unsure (fresh review of the Wells Fargo port). A
+# hidden field of a form around a button, or an empty anchor, is drawn as
+# nothing, and taken for a control it left a 1099 beside such a control
+# filed as the statement (fresh review of this port). "bounded" counts
+# the elements of the chain inside the row, all that was read before. The
+# part read past them is never the control's entry. A button drawn as an
+# input is no other document control to this reading, so taken for their
+# entry, that part made two such statements of a day one document, and the
+# first of them was pressed for both. The numbers are kept in a map on the
+# page's window and nothing is written into the page.
 _WHERE_JS = r"""(el, arg) => {
   const dateRe = /(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4}|\d{4}-\d{2}-\d{2}/i;
   const everyDate = new RegExp(dateRe.source, 'gi');
@@ -985,6 +1031,7 @@ _WHERE_JS = r"""(el, arg) => {
   };
   const ROWS = 'tr, [role=row], li';
   const CONTROLS = 'a, button, [role=button], [role=link]';
+  const ANY_CONTROL = CONTROLS + ', input, select, textarea, [role=tab], [role=menuitem], [role=option], [role=combobox], [role=listbox]';
   const marked = (c) => c.matches(arg.marked);
   const isDoc = (c) => marked(c)
     || bill.test((c.getAttribute('aria-label') || c.innerText || '').replace(/\s+/g, ' ').trim());
@@ -1039,10 +1086,16 @@ _WHERE_JS = r"""(el, arg) => {
   };
   const text = dated ? piecesOf(dated, inOther) : '';
   const flat = dated ? flatOutside(dated).trim() : '';
-  let bound = dated && dated !== el ? dated : (el.closest(ROWS) || el);
+  const bound = dated && dated !== el ? dated : (el.closest(ROWS) || el);
+  const drawn = (c) => {
+    const r = c.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 && getComputedStyle(c).visibility === 'visible';
+  };
+  const holdsAnother = (n) => Array.from(n.querySelectorAll(ANY_CONTROL)).some(c => c !== el && !c.contains(el) && !el.contains(c) && drawn(c));
+  let reach = bound;
   if (bound === el)
-    for (let n = el.parentElement, depth = 0; n && depth < 6 && !holdsOther(n); n = n.parentElement, depth++)
-      bound = n;
+    for (let n = el.parentElement, depth = 0; n && depth < 6 && !holdsAnother(n); n = n.parentElement, depth++)
+      reach = n;
   const wordsOf = (a) => {
     const out = [];
     const walker = document.createTreeWalker(a, NodeFilter.SHOW_TEXT);
@@ -1058,17 +1111,19 @@ _WHERE_JS = r"""(el, arg) => {
     return out.join(' ');
   };
   const chain = [];
-  let worded = null;
-  for (let n = el.parentElement; n && bound.contains(n); n = n.parentElement) {
+  let worded = null, bounded = 0;
+  for (let n = el.parentElement; n && reach.contains(n); n = n.parentElement) {
     const w = wordsOf(n);
     chain.push(w.slice(0, 300));
+    if (!bound.contains(n)) continue;
+    bounded++;
     if (w) worded = n;
   }
   const table = el.closest('tr, [role=row]');
   const row = table && bound.contains(table) ? table : (worded || bound);
   const up = [];
   for (let n = row.parentElement; n; n = n.parentElement) up.push(idOf(n));
-  return {text, flat, own: (el.innerText || '').trim().slice(0, 300), chain, row: idOf(row), up};
+  return {text, flat, own: (el.innerText || '').trim().slice(0, 300), chain, bounded, row: idOf(row), up};
 }"""
 
 
@@ -1084,14 +1139,19 @@ class _Seen:
     row: int        # the entry it belongs to, alike for every control of it
     up: tuple = ()  # what holds that entry, nearest first
     doubt: str = ""  # "date" or "kind" when its two readings disagree on it
+    held: str = ""  # the kind it was filed as before the review's two rules, when only they doubt it
 
 
 class _Survey(list):
     """Every statement and tax form control a look at the page could read
     and file, with counts of the controls that would not answer and of
-    those whose two readings disagree."""
+    those whose two readings disagree. `held` lists the controls only the
+    review's two rules left unsure. Each is still an entry of the date and
+    kind it was filed as before, so a twin it stopped from being guessed at
+    is still stopped (fresh review of the Wells Fargo port)."""
     unread = 0
     unsure = 0
+    held = ()
 
 
 def _read_control(el, index: int, new_only: bool = False) -> Optional[_Seen]:
@@ -1152,14 +1212,22 @@ def _reading(el, index: int, new_only: bool) -> Optional[_Seen]:
         href = el.get_attribute("href") or ""
     except Exception:
         href = ""      # shown in a survey, never what decides anything
-    kind = _kind_of(name + " " + str(where.get("own") or ""), [str(w) for w in where.get("chain") or ()])
+    words = name + " " + str(where.get("own") or "")
+    chain = [str(w) for w in where.get("chain") or ()]
+    kind = _kind_of(words, chain)
+    # The same careful reading without the two rules the review of this port
+    # brought, every form's number a form and nothing read past the row.
+    # Those rules only ever leave a control for a person, never file one
+    # this reading would not.
+    kind_near = _kind_of(words, chain[:int(where.get("bounded") or 0)], _A_TAX_FORM_RE.search)
     # A tax form's number only as a number of its own, and tax only as a
     # tax form. Anywhere in a row, a reference number or "Premium tax"
     # made a statement a Tax Document (review of 0.41.0).
     kind_as_before = "tax" if _A_TAX_FORM_RE.search(name + " " + row_text) else "statement"
-    doubt = "date" if iso != iso_as_before else ("kind" if kind != kind_as_before else "")
+    doubt = "date" if iso != iso_as_before else ("kind" if not kind == kind_near == kind_as_before else "")
+    held = kind_near if doubt == "kind" and kind_near == kind_as_before else ""
     return _Seen(index, el, name, href, iso or iso_as_before, kind, int(where.get("row") or 0),
-                 tuple(where.get("up") or ()), doubt)
+                 tuple(where.get("up") or ()), doubt, held)
 
 
 def _rows_of(controls) -> set:
@@ -1178,6 +1246,7 @@ def _survey(page, new_only: bool = False) -> _Survey:
     this and the download finds its control again from it, so the two read
     a control the same way. `new_only` as for _read_control."""
     out = _Survey()
+    out.held = []
     ctrls = _bill_controls(page)
     try:
         count = ctrls.count()
@@ -1194,9 +1263,17 @@ def _survey(page, new_only: bool = False) -> _Survey:
             continue
         if seen.doubt:
             out.unsure += 1
+            if seen.held:
+                out.held.append(seen)
             continue
         out.append(seen)
     return out
+
+
+def _held_as(survey: _Survey, iso: str, kind: str) -> list:
+    """The controls only the review's two rules left unsure that were filed
+    before as the document of date `iso` and kind `kind`."""
+    return [c for c in survey.held if c.iso == iso and c.held == kind]
 
 
 def collect_download_docs(page, refused: Optional[list] = None) -> List[RawDoc]:
@@ -1298,7 +1375,7 @@ def _documents_shown(page, account: str, seen: set, docs: _Found, view: Optional
         docs.append(RawDoc(title=f"{kind_title} - {disp}", account=account, date_text=iso,
                            href=first.href if PDF_HREF_RE.search(first.href or "") else "",
                            text=f"American Family {kind_title} {disp}", row_index=first.index,
-                           kind=kind, rows=len(_rows_of(controls))))
+                           kind=kind, rows=len(_rows_of(controls + _held_as(survey, iso, kind)))))
 
 
 # Why the download pressed nothing, in the only words that may say so.
@@ -1348,15 +1425,16 @@ def _control_for(page, iso: str, kind: Optional[str], trace: Optional[list] = No
         return None, ""
     survey = _survey(page, new_only)
     mine = [c for c in survey if c.iso == iso and c.kind == kind]
-    rows = _rows_of(mine)
+    kin = mine + _held_as(survey, iso, kind)
+    rows = _rows_of(kin)
     if survey.unread:
-        _nothing_pressed(trace, "a document control on the page could not be read", iso, survey, mine)
+        _nothing_pressed(trace, "a document control on the page could not be read", iso, survey, kin)
         return None, ""
     if not mine:
-        _nothing_pressed(trace, "no control of this date is this kind of document", iso, survey, mine)
+        _nothing_pressed(trace, "no control of this date is this kind of document", iso, survey, kin)
         return None, ""
     if len(rows) > 1:
-        _nothing_pressed(trace, "more than one row of this date holds this kind of document", iso, survey, mine)
+        _nothing_pressed(trace, "more than one row of this date holds this kind of document", iso, survey, kin)
         return None, ""
     chosen = mine[0]
     try:
