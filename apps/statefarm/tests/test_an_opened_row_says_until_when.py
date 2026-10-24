@@ -81,7 +81,7 @@ ROWS = [{"when": "09/12/2026", "doc": "Payment Receipt - Payment Receipt"},
         {"when": "04/16/2026", "doc": "Renewal Notice - 2017 Invented Roadster"}]
 
 
-def _drive(where):
+def _drive(where, page=PAGE):
     pw = pytest.importorskip("playwright.sync_api")
     try:
         driver = pw.sync_playwright().start()
@@ -91,7 +91,7 @@ def _drive(where):
     ctx = browser.new_context()
     ctx.route("**/*", lambda r: r.abort())
     # Two years on from today, so the line stays a day ahead whenever this runs.
-    html = (PAGE.replace("ROWS_JSON", json.dumps(ROWS)).replace("WHERE_JSON", json.dumps(where))
+    html = (page.replace("ROWS_JSON", json.dumps(ROWS)).replace("WHERE_JSON", json.dumps(where))
             .replace("LATER_JSON", json.dumps(date.today().year + 2)))
     ctx.route("https://edocuments.statefarm.com/**", lambda r: r.fulfill(
         status=200, content_type="text/html", body=html))
@@ -451,3 +451,107 @@ def test_no_page_has_another_documents_file_saved_under_this_name(tmp_path, monk
     assert saved in (b"", allowed), (saved, trace)
     if not allowed:
         assert pressed == 0, trace
+
+
+# -- a control drawn as an input -------------------------------------------------
+#
+# A control is found by its role (_bill_controls), and Playwright gives an
+# <input> of type button, submit, image or reset a button's role. The walk
+# past a day ahead and the tie of a revealed document to its row counted
+# links and buttons alone, so a control drawn as such an input was none to
+# them. Another row's View Documents drawn so, in the block under a date
+# heading, did not say the notice showing might be that row's, and another
+# entry's control drawn so did not stop the walk out of the opened entry.
+# Each saved one document under another's name. Each page is refused now as
+# when its controls are buttons, and a box to tick or a text field, which no
+# role a control is found by takes, is still no control.
+
+INPUT_KINDS = ("button", "submit", "image", "reset")
+REFUSED = "the control changed before it was pressed, so nothing was pressed"
+
+
+def _input(kind, more=""):
+    """A control drawn as an <input> of `kind`, an image given a size so
+    that it is drawn."""
+    size = " src='data:,' width='24' height='24'" if kind == "image" else ""
+    return "<input type='%s'%s%s>" % (kind, size, more)
+
+
+def _drawn_as_inputs(body, kind):
+    """`body`, rows under one date heading, with each row's View Documents
+    drawn as an input of `kind`, named for a screen reader by the words the
+    button showed."""
+    for old, new in (
+            ("<button class='view'></button>", _input(kind, " class='view'")),
+            ("row.querySelector('button')", "row.querySelector('.view')"),
+            ("b.textContent = i === openAt ? 'Hide Documents' : 'View Documents' + i;",
+             "b.setAttribute('aria-label', i === openAt ? 'Hide Documents' : 'View Documents' + i);"),
+            ("b.textContent = 'View Documents' + i;", "b.setAttribute('aria-label', 'View Documents' + i);")):
+        body = body.replace(old, new)
+    assert "<button" not in body and "b.textContent" not in body
+    return body
+
+
+@pytest.mark.parametrize("kind", INPUT_KINDS)
+@pytest.mark.parametrize("body", [_UNDER_ONE_DATE.replace("LATER", str(LATER)), UNDER_ONE_DATE_HIDE],
+                         ids=["the opened row says View Documents", "the opened row says Hide Documents"])
+def test_a_row_opened_in_place_with_its_buttons_drawn_as_inputs_is_refused(tmp_path, monkeypatch, body, kind):
+    """The coupe notice, added to the block and opened in the pressed row's
+    place, was saved as the roadster's when the rows' View Documents were
+    inputs. The other row's own View Documents in the block says the notice
+    may be that row's, as the button did, and it is not pressed."""
+    monkeypatch.setattr(site, "ROWS_WAIT_MS", 3000)
+    saved, pressed, trace = _run(_drawn_as_inputs(body, kind), "2026-03-14", "Renewal Notice - Auto",
+                                 tmp_path)
+    assert saved in (b"", b"%PDF-1.4 the roadster notice"), (saved, trace)
+    if not saved:
+        assert pressed == 0, trace
+        assert {"note": REFUSED, "why": "another View Documents sits inside the row"} in trace, trace
+
+
+# IN_A_CATEGORY_ITEM with the whole category drawn as one row of the list, and
+# the mailed entry given a control of its own that fetches no document.
+CATEGORY_AS_ONE_ROW = (IN_A_CATEGORY_ITEM
+                       .replace("<ul id='cats'><li class='cat'>", "<div role='row' class='cat'>")
+                       .replace("</li></ul>", "</div>")
+                       .replace("sent by mail</span></div>", "sent by mail</span> %s</div>"))
+
+
+@pytest.mark.parametrize("control", ["<button type='button'>Request a copy</button>"]
+                         + [_input(kind, " aria-label='Request a copy'") for kind in INPUT_KINDS],
+                         ids=["a button"] + ["an input of type %s" % kind for kind in INPUT_KINDS])
+def test_the_walk_past_a_day_ahead_stops_at_another_entrys_control_drawn_as_an_input(tmp_path, monkeypatch,
+                                                                                      control):
+    """The opened entry prints no day of its own. Its walk passed the day
+    ahead and, with the mailed entry's control drawn as an input, stepped
+    into the whole category and took the mailed entry's day, so the
+    declarations of another day were pressed and saved under it. It stops at
+    that control as at a button, and the row reads no day."""
+    assert CATEGORY_AS_ONE_ROW.count("role='row'") == 1 and CATEGORY_AS_ONE_ROW.count("%s") == 1
+    monkeypatch.setattr(site, "ROWS_WAIT_MS", 3000)
+    saved, pressed, trace = _run(CATEGORY_AS_ONE_ROW % control, "2026-03-14",
+                                 "Declarations Page - Homeowners", tmp_path)
+    assert saved == b"" and pressed == 0, (saved, trace)
+    assert {"note": REFUSED, "why": "the row's control no longer carries this date"} in trace, trace
+
+
+@pytest.mark.parametrize("field", ["<input type='checkbox' aria-label='Select'>",
+                                   "<input type='text' aria-label='Note'>"],
+                         ids=["a box to tick", "a text field"])
+def test_an_opened_row_holding_a_box_to_tick_or_a_field_still_has_its_document_saved(tmp_path, field):
+    """A box to tick or a text field beside the opened row's View Documents
+    is no control to the walk, so the walk past the day ahead still reaches
+    the row's own date and its document is saved as before."""
+    page = PAGE.replace("<span>Sent by mail.</span>", "<span>Sent by mail.</span> " + field)
+    assert page != PAGE
+    driver, browser, pg = _drive("beside the button", page)
+    try:
+        out = tmp_path / "doc.pdf"
+        trace: list = []
+        assert site.download_bill(pg, None, "2026-07-22", out, title="Payment Receipt - Billing/Payments",
+                                  trace=trace), trace
+        assert out.read_bytes() == b"%PDF-1.4 the document of 07/22/2026"
+        assert pg.evaluate("window.docsPressed") == 1
+    finally:
+        browser.close()
+        driver.stop()
