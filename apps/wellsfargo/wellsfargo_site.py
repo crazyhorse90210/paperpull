@@ -1373,6 +1373,17 @@ def _kind_of(own: str, chain, names_a_form=_names_a_tax_form) -> str:
 # statements of a day one document, and one of them would be pressed for
 # both. The numbers are kept in a map on the page's window and nothing is
 # written into the page.
+#
+# The page's document controls are its links and buttons, and its inputs of
+# type button, submit, image or reset, which the core finds by their role as
+# it finds a button. Counted as links and buttons alone, a document's button
+# drawn as an input was no other document control to this reading. So two
+# statements of a day drawn so under one date heading were one entry, and
+# the first of them was pressed for both (found by the fresh review of this
+# reading's port to SBA and American Family). The words of such a button's
+# part were read as another control's too, so a View beside a 1099-INT drawn
+# so was pressed for the 1099-INT, and a 1099-INT printing no date was filed
+# under the date of a statement row drawn so.
 _WHERE_JS = r"""(el, pattern) => {
   const dateRe = /(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4}|\d{4}-\d{2}-\d{2}/i;
   const everyDate = new RegExp(dateRe.source, 'gi');
@@ -1384,7 +1395,7 @@ _WHERE_JS = r"""(el, pattern) => {
     return store.ids.get(n);
   };
   const ROWS = 'tr, [role=row], li';
-  const CONTROLS = 'a, button, [role=button], [role=link]';
+  const CONTROLS = 'a, button, [role=button], [role=link], input[type=button], input[type=submit], input[type=image], input[type=reset]';
   const ANY_CONTROL = CONTROLS + ', input, select, textarea, [role=tab], [role=menuitem], [role=option], [role=combobox], [role=listbox]';
   const isDoc = (c) => bill.test((c.getAttribute('aria-label') || c.innerText || '').replace(/\s+/g, ' ').trim());
   const docsIn = (n) => Array.from(n.querySelectorAll(CONTROLS)).filter(isDoc);

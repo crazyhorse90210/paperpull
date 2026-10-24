@@ -7,6 +7,30 @@ All notable changes to PaperPull are recorded here. Versioning follows
 - **MINOR**, a new app, or a cross-app feature
 - **MAJOR**, breaking changes (repo layout, config format, removing an app)
 
+## [Unreleased]
+
+### Fixed
+- **Wells Fargo, SBA and American Family read a document's button drawn as
+  an input like any other button.** The core finds a document's button by
+  its role and its name, and a page can draw one as an `<input>` of type
+  button, submit, image or reset. The three apps counted only links and
+  buttons as the page's document controls, so such an input was no other
+  document control to them. Two statements of a day drawn so under one date
+  heading were one entry, and the first was pressed for both. A View that
+  names no kind, beside a tax form's part whose button was drawn so, read
+  that part's words as its own, so View was pressed for the tax form and
+  saved as it. And a tax form whose row prints no date took the date of a
+  statement row drawn so, and was filed and pressed under that date.
+  American Family's row rule also took a list for the row of a bill naming
+  its own date beside a 1099 row drawn so, and left that bill for a person
+  every run. Now each app counts those inputs as document controls, American
+  Family's row rule included, and a page drawn with them reads exactly as
+  the same page drawn with buttons. The twins were found by a fresh review
+  of SBA's and American Family's reading and proven on all three apps, and
+  the other shapes were found while fixing them, each proven in a browser
+  before the change. The statements a tester's recordings show for Wells
+  Fargo and American Family are links, which this leaves as they read.
+
 ## [0.58.0] - 2026-10-24
 
 Wells Fargo opens Statements & Documents from the Accounts menu again, and

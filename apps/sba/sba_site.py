@@ -615,11 +615,21 @@ def _kind_of(own: str, chain, names_a_form=_names_a_tax_form) -> str:
 # "bounded" counts the elements of the chain inside the element
 # that printed the date or the row, all that was read before. The part read
 # past them is never the control's entry. The core finds controls by their
-# words when none is named for a document (#38), and finds a button drawn
-# as an input, and this reading counts neither as another document control.
-# So taken for their entry, that part made two such statements of a day one
-# document, and the first of them was pressed for both. The numbers are
-# kept in a map on the page's window and nothing is written into the page.
+# words when none is named for a document (#38), and this reading counts
+# none of them as another document control. So taken for their entry, that
+# part made two such statements of a day one document, and the first of
+# them was pressed for both. The numbers are kept in a map on the page's
+# window and nothing is written into the page.
+#
+# The page's document controls are its links and buttons, and its inputs of
+# type button, submit, image or reset, which the core finds by their role as
+# it finds a button. Counted as links and buttons alone, a document's button
+# drawn as an input was no other document control to this reading. So two
+# statements of a day drawn so under one date heading were one entry, and
+# the first of them was pressed for both (fresh review of this port). The
+# words of such a button's part were read as another control's too, so a
+# View beside a 1098 drawn so was pressed for the 1098, and a 1098 printing
+# no date was filed under the date of a statement row drawn so.
 _WHERE_JS = r"""(el, pattern) => {
   const dateRe = /(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4}|\d{4}-\d{2}-\d{2}/i;
   const everyDate = new RegExp(dateRe.source, 'gi');
@@ -631,7 +641,7 @@ _WHERE_JS = r"""(el, pattern) => {
     return store.ids.get(n);
   };
   const ROWS = 'tr, [role=row], li';
-  const CONTROLS = 'a, button, [role=button], [role=link]';
+  const CONTROLS = 'a, button, [role=button], [role=link], input[type=button], input[type=submit], input[type=image], input[type=reset]';
   const ANY_CONTROL = CONTROLS + ', input, select, textarea, [role=tab], [role=menuitem], [role=option], [role=combobox], [role=listbox]';
   const isDoc = (c) => bill.test((c.getAttribute('aria-label') || c.innerText || '').replace(/\s+/g, ' ').trim());
   const docsIn = (n) => Array.from(n.querySelectorAll(CONTROLS)).filter(isDoc);

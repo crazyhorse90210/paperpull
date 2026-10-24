@@ -969,7 +969,7 @@ def test_a_link_dated_only_by_its_name_reads_no_words_it_shares_with_other_docum
 def test_two_statements_dated_only_by_their_names_stay_two_entries(page, presses, tmp_path, link):
     """Two bills' statements of one day, each a control naming only its date
     for a screen reader, each in a part of the page of its own, under a
-    heading. A button drawn as an input is no other document control to
+    heading. A button drawn as an input was no other document control to
     this reading, so what was read around each for its kind reached the
     heading, and taken for their entry it made the two one document, and
     the first was pressed for both. Each entry is still the control alone,
@@ -1340,3 +1340,156 @@ def test_a_form_s_own_name_is_still_read_beside_its_size(page, words, date):
     among them, which is how a 1099-MISC may be written."""
     page.set_content(_page(_marked("g-tax", words, date)))
     assert _found(site.collect_download_docs(page)) == [(DAY, "tax", TAX)]
+
+
+# --- a document's button drawn as an input -------------------------------------
+#
+# The core finds a document's control by its role and its name, and an
+# <input> of type button, submit, image or reset has a button's role. Both
+# readings counted only links and buttons as the page's document controls,
+# so such an input was no other document control to them. The words of its
+# part were read as another control's, the date of its row was lent to a row
+# that prints none, two such parts under one date heading were one entry,
+# and a list holding its row was taken for the row of a bill beside it. Each
+# shape here is read the way the same page drawn with buttons is, and an
+# input the core never finds as a button, a box to tick or a text field, is
+# still no document control.
+
+INPUT_KINDS = ("button", "submit", "image", "reset")
+
+
+def _input(kind, guid, label):
+    """A document's button drawn as an <input> of `kind`, named `label` for
+    a screen reader. An image is given a size so that it is drawn."""
+    size = " src='data:,' width='24' height='24'" if kind == "image" else ""
+    return "<input type='%s' data-guid='%s' aria-label='%s'%s>" % (kind, guid, label, size)
+
+
+@pytest.mark.parametrize("kind", INPUT_KINDS)
+def test_two_bills_under_one_date_heading_drawn_as_inputs_are_two_documents(page, presses, tmp_path, kind):
+    """Each bill's part prints words of its own, and drawn with buttons the
+    two are refused as two rows. Drawn as inputs, neither was another
+    document control to the other, so the part holding both was the entry
+    of each, the two were one document, and the first bill's statement was
+    pressed for the day's."""
+    page.set_content(_blocks("<div data-guid='d-day'><h3>January 31, 2026</h3>"
+                             "<div>Auto policy bill %s</div><div>Home policy bill %s</div></div>"
+                             % (_input(kind, "g-first", "View bill"), _input(kind, "g-second", "View bill"))))
+    assert [(d.title, d.rows) for d in site.collect_download_docs(page)] == [(STATEMENT, 2)]
+    saved, trace = _download(page, tmp_path, STATEMENT)
+    assert not saved and presses == [], (presses, trace)
+    assert _refusals(trace) == [TWO_ROWS], trace
+
+
+def _input_statement_row(kind):
+    """A bill's statement row whose button is drawn as an input."""
+    return ("<div data-guid='r-statement'><span>Statement date 01/31/2026</span> "
+            "<span>Billing statement</span> %s</div>" % _input(kind, "g-statement", "View bill"))
+
+
+@pytest.mark.parametrize("first", ["statement", "tax form"])
+@pytest.mark.parametrize("kind", INPUT_KINDS)
+def test_a_tax_row_without_a_date_borrows_none_from_a_statement_drawn_as_an_input(page, presses, tmp_path,
+                                                                                 kind, first):
+    """The 1099-INT's row prints no date, so the row rule climbs to the list
+    around every row, and beside a statement row drawn with a button it
+    finds the list holding another row and gives no date. Drawn as an
+    input, the statement's button was no other document control in the
+    list, so the 1099-INT took the statement row's date, and it was filed
+    and pressed as the day's tax form."""
+    rows = (_input_statement_row(kind), UNDATED_TAX_ROW)
+    page.set_content(_page(*(rows if first == "statement" else rows[::-1])))
+    docs = site.collect_download_docs(page)
+    assert _found(docs) == [(DAY, "statement", STATEMENT)] and docs.unsure == 0
+    saved, trace = _download(page, tmp_path, TAX)
+    assert not saved and presses == [], (presses, trace)
+    assert _refusals(trace) == [NONE_OF_THIS_KIND], trace
+    saved, trace = _download(page, tmp_path, STATEMENT)
+    assert saved and presses == ["g-statement"], (presses, trace)
+
+
+@pytest.mark.parametrize("kind", INPUT_KINDS)
+def test_a_bill_naming_its_date_beside_a_1099_row_drawn_as_an_input_is_its_statement(page, presses, tmp_path,
+                                                                                    kind):
+    """The bill's control names its own date, in a list that prints a date
+    and holds the day's 1099 row. Drawn with a button, the 1099's row is
+    another row to the row rule, so the list is no row of the bill's, and
+    the bill is filed by its own words. Drawn as an input, the row rule took
+    the list for the bill's row and read the 1099's words in it, so the bill
+    was left for a person every run."""
+    page.set_content(_page("<div><span>Statement date 01/31/2026</span> "
+                           "<div><button data-guid='g-bill' aria-label='View bill for January 31, 2026'>View</button>"
+                           "</div><div><span>Issued 01/31/2026</span> <span>Form 1099-INT</span> %s</div></div>"
+                           % _input(kind, "g-1099", "Download 1099-INT")))
+    docs = site.collect_download_docs(page)
+    assert _found(docs) == [(DAY, "statement", STATEMENT), (DAY, "tax", TAX)] and docs.unsure == 0
+    for title, guid in ((STATEMENT, "g-bill"), (TAX, "g-1099")):
+        presses.clear()
+        saved, trace = _download(page, tmp_path, title)
+        assert saved and presses == [guid], (title, presses, trace)
+
+
+# A View that names no kind, and beside it a part naming the 1099-INT that
+# holds the 1099-INT's own button.
+VIEW_BESIDE_A_1099 = ("<div>01/31/2026 <button data-guid='g-view'>View</button> "
+                      "<div><span>Form 1099-INT</span> %s</div></div>")
+
+
+@pytest.mark.parametrize("kind", INPUT_KINDS)
+def test_a_plain_view_beside_a_1099_drawn_as_an_input_is_never_pressed_for_it(page, presses, tmp_path, kind):
+    """Drawn with a button, the 1099-INT's part is the 1099-INT's alone, so
+    View is the statement read with care and the tax form read the old way,
+    and it is left for a person. Drawn as an input, that part was read as
+    View's too, both readings made View the tax form, and View, coming
+    first, was pressed for the 1099-INT."""
+    page.set_content(_blocks(VIEW_BESIDE_A_1099 % _input(kind, "g-tax", "Download")))
+    docs = site.collect_download_docs(page)
+    assert _found(docs) == [(DAY, "tax", TAX)] and docs.unsure == 1
+    saved, trace = _download(page, tmp_path, TAX)
+    assert saved and presses == ["g-tax"], (presses, trace)
+    presses.clear()
+    saved, trace = _download(page, tmp_path, STATEMENT)
+    assert not saved and presses == [], (presses, trace)
+
+
+def test_a_run_files_a_1099_drawn_as_an_input_from_its_own_button(page, run):
+    """The shape above through a whole run. The plain View was saved under
+    Tax Documents, and the 1099-INT itself never was."""
+    page.set_content(_blocks(VIEW_BESIDE_A_1099 % _input("button", "g-tax", "Download")))
+    run.cmd_discover(quiet=True)
+    run.process(run._select())
+    assert _filed(run) == {"Tax Documents": ["g-tax"]}
+
+
+@pytest.mark.parametrize("content", [
+    "<table><tbody><tr><td>Statement date 01/31/2026</td><td>Billing statement</td><td>%s %s</td></tr>"
+    "</tbody></table>",
+    "<div><span>01/31/2026</span> Billing statement %s %s</div>",
+    "<div>01/31/2026 Billing statement <span>On screen %s</span> <span>As a file %s</span></div>",
+], ids=["in a table row", "on a card", "with a caption beside each"])
+@pytest.mark.parametrize("kind", INPUT_KINDS)
+def test_view_and_download_drawn_as_inputs_stay_one_document(page, presses, tmp_path, kind, content):
+    """Counted as document controls, two inputs of one entry still fetch one
+    document, as View bill and Download PDF drawn with buttons do."""
+    page.set_content(_blocks(content % (_input(kind, "g-view", "View bill"),
+                                        _input(kind, "g-download", "Download PDF"))))
+    assert [(d.title, d.rows) for d in site.collect_download_docs(page)] == [(STATEMENT, 1)]
+    saved, trace = _download(page, tmp_path, STATEMENT)
+    assert saved and presses == ["g-view"], (presses, trace)
+
+
+@pytest.mark.parametrize("kind", ["checkbox", "text"])
+def test_a_box_to_tick_named_like_a_document_is_still_no_document_control(page, presses, tmp_path, kind):
+    """The core finds a document's control by a button's or a link's role
+    alone, so it never hands either reading a box to tick or a text field,
+    whatever its label says, and neither is another document control to
+    them. Counted as one, the box's own dated row inside the statement's row
+    would make that row a list, and the statement would have no date of its
+    own and be left for a person."""
+    page.set_content(_blocks("<div><span>Statement date 01/31/2026</span> <span>Billing statement</span> "
+                             "<button data-guid='g-statement'>View bill</button> "
+                             "<div>12/31/2025 <input type='%s' aria-label='View bill'></div></div>" % kind))
+    docs = site.collect_download_docs(page)
+    assert _found(docs) == [(DAY, "statement", STATEMENT)] and docs.unsure == 0
+    saved, trace = _download(page, tmp_path, STATEMENT)
+    assert saved and presses == ["g-statement"], (presses, trace)

@@ -659,10 +659,15 @@ class _Found(list):
 # inside it. A document in a row with no date of its own climbed to the
 # whole list, whose summary said "billing statement was issued 09/12/2026",
 # and a payment plan agreement was saved as that statement (review of
-# 0.41.0).
+# 0.41.0). A bill control is a link or a button, or an input of type button,
+# submit, image or reset, which the core finds by its role as it finds a
+# button. Counted as links and buttons alone, a bill's button drawn as an
+# input was no other row to this rule, so a 1099 whose row prints no date
+# took the date of a statement row drawn so.
 _ROW_OF_JS = r"""(el, arg) => {
   const dateRe = /(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4}|\d{4}-\d{2}-\d{2}/i;
   const bill = new RegExp(arg.pattern, 'i');
+  const CONTROLS = 'a, button, [role=button], [role=link], input[type=button], input[type=submit], input[type=image], input[type=reset]';
   const marked = (c) => c.matches(arg.marked);
   const wordsOf = (c) => ((c.getAttribute('aria-label') || c.innerText || '')).replace(/\s+/g, ' ').trim();
   const rowOf = (c) => {
@@ -675,7 +680,7 @@ _ROW_OF_JS = r"""(el, arg) => {
   };
   const mine = rowOf(el);
   if (!mine) return '';
-  for (const c of mine.querySelectorAll('a, button, [role=button], [role=link]')) {
+  for (const c of mine.querySelectorAll(CONTROLS)) {
     if (c === el || el.contains(c) || c.contains(el)) continue;
     if (!bill.test(wordsOf(c)) && !marked(c)) continue;
     const theirs = rowOf(c);
@@ -1036,11 +1041,21 @@ def _kind_of(own: str, chain, names_a_form=_names_a_tax_form) -> str:
 # nothing, and taken for a control it left a 1099 beside such a control
 # filed as the statement (fresh review of this port). "bounded" counts
 # the elements of the chain inside the row, all that was read before. The
-# part read past them is never the control's entry. A button drawn as an
-# input is no other document control to this reading, so taken for their
-# entry, that part made two such statements of a day one document, and the
-# first of them was pressed for both. The numbers are kept in a map on the
-# page's window and nothing is written into the page.
+# part read past them is never the control's entry. Taken for their entry,
+# that part made two statements of a day one document while a button drawn
+# as an input was no other document control to this reading, and the first
+# of them was pressed for both. The numbers are kept in a map on the page's
+# window and nothing is written into the page.
+#
+# The page's document controls are its links and buttons, and its inputs of
+# type button, submit, image or reset, which the core finds by their role as
+# it finds a button, the same as _ROW_OF_JS counts. Counted as links and
+# buttons alone, a document's button drawn as an input was no other document
+# control to this reading. So two statements of a day drawn so under one
+# date heading were one entry, and the first of them was pressed for both
+# (fresh review of this port). The words of such a button's part were read
+# as another control's too, so a View beside a 1099 drawn so was pressed for
+# the 1099.
 _WHERE_JS = r"""(el, arg) => {
   const dateRe = /(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4}|\d{4}-\d{2}-\d{2}/i;
   const everyDate = new RegExp(dateRe.source, 'gi');
@@ -1052,7 +1067,7 @@ _WHERE_JS = r"""(el, arg) => {
     return store.ids.get(n);
   };
   const ROWS = 'tr, [role=row], li';
-  const CONTROLS = 'a, button, [role=button], [role=link]';
+  const CONTROLS = 'a, button, [role=button], [role=link], input[type=button], input[type=submit], input[type=image], input[type=reset]';
   const ANY_CONTROL = CONTROLS + ', input, select, textarea, [role=tab], [role=menuitem], [role=option], [role=combobox], [role=listbox]';
   const marked = (c) => c.matches(arg.marked);
   const isDoc = (c) => marked(c)
