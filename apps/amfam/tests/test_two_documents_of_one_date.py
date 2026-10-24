@@ -1216,3 +1216,127 @@ def test_a_control_nobody_sees_does_not_cut_short_what_a_link_reads(page, presse
     assert _found(docs) == [] and docs.unsure == 1
     saved, trace = _download(page, tmp_path, STATEMENT)
     assert not saved and presses == [], (presses, trace)
+
+
+# --- a size printed after a document's date ------------------------------------
+#
+# A Wells Fargo tester's recording shows each statement's link naming its
+# date and the size of its PDF, "Statement 09/30/26 (123K, PDF)". Printed
+# here with a space, "(1099 KB, PDF)", it read as a 1099 the old way and with
+# care, so a statement of that size was filed as a Tax Document, and a row
+# printing nothing else made a bare View a tax form's control.
+
+def _sized_statement(size, guid="g-statement"):
+    return _marked(guid, "Statement date", "01/31/2026 (%s, PDF)" % size)
+
+
+def _sized_link(size, guid="g-statement"):
+    """A row whose marked link names the date and the size itself."""
+    return ("<div data-cy='statementRow' data-guid='r-%s'><span>Billing statement</span> "
+            "<a data-cy='statementPDF' data-guid='%s'>Statement 01/31/2026 (%s, PDF)</a></div>" % (guid, guid, size))
+
+
+@pytest.mark.parametrize("size", ["1099 KB", "1098 K", "5498 KB", "1099K", "10990 KB", "123 KB"])
+@pytest.mark.parametrize("row", [_sized_statement, _sized_link], ids=["in the row's words", "in the link's name"])
+def test_a_statement_s_size_never_makes_it_a_tax_form(page, presses, tmp_path, size, row):
+    """A statement of 1099 KB, 1098 K or 5498 KB was filed as that tax form,
+    or left for a person when only its link named the size. The size says
+    how large the PDF is and nothing of what it is, so no reading reads it,
+    and the statement is filed and pressed like any other. One of 1099K,
+    10990 KB or 123 KB was a statement before and still is."""
+    page.set_content(_page(row(size)))
+    docs = site.collect_download_docs(page)
+    assert _found(docs) == [(DAY, "statement", STATEMENT)] and docs.unsure == 0
+    saved, trace = _download(page, tmp_path, STATEMENT)
+    assert saved and presses == ["g-statement"], (presses, trace)
+
+
+def test_a_size_beside_a_view_bill_is_read_by_no_reading(page, presses, tmp_path):
+    """The size printed in the row beside a View bill. Read the old way the
+    row's 1099 made the bill a tax form, read with care it was a statement,
+    and it was left for a person every run."""
+    page.set_content(_page("<div data-guid='r-statement'><span>Statement date 01/31/2026</span> "
+                           "<span>Billing statement (1099 KB, PDF)</span> "
+                           "<button data-guid='g-statement'>View bill</button></div>"))
+    docs = site.collect_download_docs(page)
+    assert _found(docs) == [(DAY, "statement", STATEMENT)] and docs.unsure == 0
+    saved, trace = _download(page, tmp_path, STATEMENT)
+    assert saved and presses == ["g-statement"], (presses, trace)
+
+
+def test_a_statement_sized_like_a_form_leaves_the_day_s_1099_its_own(page, presses, tmp_path):
+    """Read as a tax form, the statement was a second tax form of its day,
+    so the day's real 1099 was refused as its twin and neither was saved."""
+    page.set_content(_page(_sized_statement("1099 KB"),
+                           _marked("g-tax", "Form 1099-INT", "01/31/2026 (45 KB, PDF)")))
+    assert sorted((d.title, d.rows) for d in site.collect_download_docs(page)) == [(STATEMENT, 1), (TAX, 1)]
+    for title, guid in ((TAX, "g-tax"), (STATEMENT, "g-statement")):
+        presses.clear()
+        saved, trace = _download(page, tmp_path, title)
+        assert saved and presses == [guid], (title, presses, trace)
+
+
+@pytest.mark.parametrize("size", ["1099 KB", "45 KB"])
+@pytest.mark.parametrize("row", [
+    "<div data-guid='r-x'><span>01/31/2026 (%s, PDF)</span> <button data-guid='g-x'>View</button></div>",
+    "<div data-cy='statementRow' data-guid='r-x'><span>Payment received 01/31/2026 (%s, PDF)</span> "
+    "<a data-cy='statementPDF' title='View statement' data-guid='g-x'><span>PDF</span></a></div>",
+], ids=["a bare View in a row that names nothing", "a marked link in a payment's row"])
+def test_a_size_never_makes_a_row_name_a_document(page, presses, tmp_path, row, size):
+    """A bare View is taken only from a row that names a statement or a tax
+    form, and a marked link never from a payment's row that names neither.
+    A size of 1099 KB named a 1099 for both, so the View was filed as a Tax
+    Document and the payment's link was saved as one. Such a row reads as
+    it does with any other size, and nothing in it is a document."""
+    page.set_content(_page(row % size))
+    docs = site.collect_download_docs(page)
+    assert _found(docs) == [] and docs.unsure == 0
+    saved, trace = _download(page, tmp_path, TAX)
+    assert not saved and presses == [], (presses, trace)
+
+
+@pytest.mark.parametrize("size", ["45 KB", "1099 KB"])
+@pytest.mark.parametrize("row, found", [
+    ("<div data-guid='r-x'><span>Tax (%s, PDF)</span> <span>Forms 01/31/2026</span> "
+     "<button data-guid='g-x'>View</button></div>", []),
+    ("<div data-guid='r-x'><span>Tax (%s, PDF)</span> <span>Statement date 01/31/2026</span> "
+     "<button data-guid='g-x'>View</button></div>", [(DAY, "statement", STATEMENT)]),
+    ("<div data-cy='statementRow' data-guid='r-x'><span>Payment received 01/31/2026</span> "
+     "<span>Tax (%s, PDF) forms</span> "
+     "<a data-cy='statementPDF' title='View statement' data-guid='g-x'><span>PDF</span></a></div>", []),
+    ("<div data-guid='r-x'><span>Premium tax (%s, PDF)</span> <span>Statement date 01/31/2026</span> "
+     "<button data-guid='g-x'>View bill</button></div>", [(DAY, "statement", STATEMENT)]),
+], ids=["tax and forms beside a bare View", "tax and statement beside a bare View",
+        "tax and forms in a payment's row", "premium tax and a statement date"])
+def test_the_words_on_either_side_of_a_size_are_never_read_as_one(page, row, found, size):
+    """The size was first left out as a space, which joined the words
+    around it, so "Tax (45 KB, PDF) Forms" read as "tax forms" and
+    "Premium tax (45 KB, PDF) Statement date" as a tax statement. A bare
+    View was taken as a tax form's, a payment's link was saved as a Tax
+    Document, and a bill was left for a person. The words stay apart, as
+    the size kept them, and each row reads as it did with the size in it
+    (fresh review of this change)."""
+    page.set_content(_page(row % size))
+    docs = site.collect_download_docs(page)
+    assert _found(docs) == found and docs.unsure == 0
+
+
+def test_a_bills_statement_of_1099_kb_is_filed_under_statements(billing):
+    app = billing(_billing(_sized_statement("1099 KB")))
+    app.cmd_discover(quiet=True)
+    app.process(app._select())
+    assert _filed(app) == {"Statements": ["g-statement"]}
+
+
+@pytest.mark.parametrize("words, date", [("Form 1099-INT", "01/31/2026 (1099 KB, PDF)"),
+                                         ("Form 1099 MISC", "01/31/2026 (45 KB, PDF)"),
+                                         ("Tax form", "01/31/2026 (5498 KB, PDF)"),
+                                         ("Issued", "01/31/2026 (1099, PDF)")],
+                         ids=["a 1099-INT of 1099 KB", "a 1099-MISC written with a space", "a tax form of 5498 KB",
+                              "a form's number where a size would be"])
+def test_a_form_s_own_name_is_still_read_beside_its_size(page, words, date):
+    """Only a number with K or M in parentheses before PDF is a size and
+    goes unread. A form's own name is read as it always was, 1099 MISC
+    among them, which is how a 1099-MISC may be written."""
+    page.set_content(_page(_marked("g-tax", words, date)))
+    assert _found(site.collect_download_docs(page)) == [(DAY, "tax", TAX)]
