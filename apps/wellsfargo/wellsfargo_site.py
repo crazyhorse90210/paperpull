@@ -312,13 +312,16 @@ def detect_security_challenge(page) -> Optional[str]:
     return None
 
 
+def _refused(name: str) -> bool:
+    """Whether words say something no press here may do, whatever else
+    they say."""
+    return bool(FORBIDDEN_CONTROL_RE.search(name) or SETTINGS_CONTROL_RE.search(name)
+                or AUTH_CONTROL_RE.search(name))
+
+
 def is_safe_control(name: str) -> bool:
     name = (name or "").strip()
-    if not name:
-        return False
-    if FORBIDDEN_CONTROL_RE.search(name):
-        return False
-    if SETTINGS_CONTROL_RE.search(name) or AUTH_CONTROL_RE.search(name):
+    if not name or _refused(name):
         return False
     return bool(SAFE_DOC_CONTROL_RE.search(name))
 
@@ -414,6 +417,9 @@ MENU_BUTTON_RE = re.compile(r"^\s*menu\s*$", re.I)
 ACCOUNTS_BUTTON_RE = re.compile(r"^\s*accounts\s*$", re.I)
 # How long a menu that was opened is given to show the link, in milliseconds.
 _MENU_SHOW_MS = 5000
+# How long the link's press is given to open the statements page, in
+# milliseconds.
+_OPEN_MS = 20000
 # The roles the Statements & Documents control has been seen in, or could
 # be drawn in, a link, a button or an entry of a menu.
 _DOCUMENTS_ROLES = ("link", "button", "menuitem")
@@ -503,6 +509,161 @@ def _label_of(el) -> str:
                          or (el.inner_text(timeout=_READ_MS) or "")).split())
     except Exception:
         return ""
+
+
+# A control's own words, read six ways for the check before its press.
+#
+#   label     its aria-label
+#   text      what it holds as text, innerText, which keeps words put there
+#             for a screen reader alone and marks hidden from one
+#   said      its text with every part hidden from a screen reader or not
+#             drawn at all left out, the way its name is made from its text
+#   labelled  the text of the parts aria-labelledby names, only when every
+#             one of them is a drawn part of the control itself, else ""
+#   seen      its text with every part not drawn, drawn under 2 pixels, cut
+#             away, outside the control's own box, see-through or in a color
+#             of no strength left out, the ways words are put there for a
+#             screen reader alone
+#   style     what its style draws before and after it and each of its parts,
+#             read only for words the guard refuses
+#
+# A tester's View Statements & Documents in the Accounts menu was found by
+# its name, and its text alone, read again, refused it in both runs (#27).
+_OWN_WORDS_JS = r"""(el) => {
+  const box = el.getBoundingClientRect();
+  const notDrawn = (e) => {
+    const s = getComputedStyle(e);
+    return s.display === 'none' || s.visibility === 'hidden';
+  };
+  const unspoken = (e) => e.getAttribute('aria-hidden') === 'true' || notDrawn(e);
+  const strength = (color) => {
+    const m = /rgba?\(([^)]*)\)/.exec(color || '');
+    const p = m ? m[1].split(/[\s,\/]+/).filter(Boolean) : [];
+    return p.length > 3 ? parseFloat(p[3]) : 1;
+  };
+  // A color is passed down to every part, and see-through is not, so the
+  // color is asked of the element holding a text, and see-through of each
+  // part on the way down (unseen).
+  const faint = (e) => strength(getComputedStyle(e).color) === 0;
+  const unseen = (e) => {
+    if (notDrawn(e)) return true;
+    const s = getComputedStyle(e);
+    if (parseFloat(s.opacity) === 0) return true;
+    if (s.display === 'contents') return false;
+    if ((s.clip && s.clip !== 'auto') || (s.clipPath && s.clipPath !== 'none')) return true;
+    const r = e.getBoundingClientRect();
+    if (r.width < 2 || r.height < 2) return true;
+    return r.right <= box.left || r.left >= box.right || r.bottom <= box.top || r.top >= box.bottom;
+  };
+  // `shown`, when given, is asked of the element holding a text before
+  // that text is read.
+  const read = (node, skip, shown) => {
+    let out = '';
+    const own = !shown || shown(node);
+    for (const c of node.childNodes) {
+      if (c.nodeType === Node.TEXT_NODE) { if (own) out += c.data; }
+      else if (c.nodeType === Node.ELEMENT_NODE && !skip(c)) {
+        const inline = getComputedStyle(c).display.startsWith('inline');
+        const t = read(c, skip, shown);
+        out += inline ? t : ' ' + t + ' ';
+      }
+    }
+    return out;
+  };
+  const style = [el, ...el.querySelectorAll('*')].slice(0, 300)
+    .flatMap((e) => ['::before', '::after'].map((p) => getComputedStyle(e, p).content))
+    .filter((c) => c && c !== 'none' && c !== 'normal').join(' ');
+  const ownPart = (p) => {
+    if (!p || p === el || !el.contains(p)) return false;
+    for (let e = p; e && e !== el; e = e.parentElement) if (unspoken(e)) return false;
+    return true;
+  };
+  const ids = (el.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean);
+  const root = el.getRootNode();
+  const parts = ids.map((id) => (root.getElementById ? root.getElementById(id) : null));
+  const own = parts.length > 0 && parts.every(ownPart);
+  return {label: el.getAttribute('aria-label') || '', labelled_by: ids.length > 0,
+          labelled: own ? parts.map((p) => read(p, unspoken)).join(' ') : '',
+          text: el.innerText || '', said: read(el, unspoken),
+          seen: read(el, unseen, (e) => !faint(e)), style: style,
+          hidden_elements: el.querySelectorAll('[aria-hidden=true]').length};
+}"""
+_READINGS = ("label", "text", "said", "labelled", "seen", "style")
+_STATEMENTS_WORD_RE = re.compile(r"\bstatements?\b", re.I)
+_DOCUMENTS_WORD_RE = re.compile(r"\bdocuments?\b", re.I)
+# A soft hyphen and the characters of no width, which a control's name
+# leaves out and its text keeps, so a name that is whole reads whole.
+_NO_WIDTH = dict.fromkeys((0x00AD, 0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF))
+
+
+def _own_words(el) -> Optional[dict]:
+    """A control's own words read six ways (_OWN_WORDS_JS), each with the
+    characters of no width taken out and its spaces made single, or None
+    when they cannot be read."""
+    try:
+        seen = el.evaluate(_OWN_WORDS_JS, timeout=_READ_MS) or {}
+    except Exception:
+        return None
+    words = {k: " ".join(str(seen.get(k) or "").translate(_NO_WIDTH).split()) for k in _READINGS}
+    words["labelled_by"] = bool(seen.get("labelled_by"))
+    try:
+        words["hidden_elements"] = int(seen.get("hidden_elements") or 0)
+    except (TypeError, ValueError):
+        words["hidden_elements"] = 0
+    return words
+
+
+def _whole(name: str) -> bool:
+    return bool(DOCUMENTS_LINK_RE.match(name)) and is_safe_control(name)
+
+
+def _seen_names_both(words: dict) -> bool:
+    return bool(_STATEMENTS_WORD_RE.search(words["seen"]) and
+                _DOCUMENTS_WORD_RE.search(words["seen"]))
+
+
+def _reads_as_documents_link(words: Optional[dict]) -> bool:
+    """Whether a control's own words (_own_words) are the Statements &
+    Documents link's, refusing when unsure.
+
+    No reading may say anything the guard refuses whatever else it says, so
+    a label naming the link on a control holding or drawing Close an
+    Account is refused. A control with a label takes its label, which has
+    to be the link's whole name, as it always did, and one without takes
+    its text when that is the whole name. Otherwise its name read the ways
+    a screen reader makes it, said or labelled by its own parts, has to be
+    the whole name, and what it shows has to name statements and documents,
+    so a mark hidden from a screen reader or a word put there for one alone
+    does not refuse the link, while a control that shows View Check Copies
+    under a name put there for a screen reader alone, in the ways `seen`
+    leaves out, is still never taken. A page that hides those words some
+    other way, under a part of the control drawn over them say, is not
+    read for it."""
+    if not words or any(_refused(words[k]) for k in _READINGS):
+        return False
+    if words["label"]:
+        return _whole(words["label"])
+    if _whole(words["text"]):
+        return True
+    return (_whole(words["said"]) or _whole(words["labelled"])) and _seen_names_both(words)
+
+
+def _how_the_link_read(words: Optional[dict]) -> dict:
+    """What the check before the press found in the link's own words, for
+    the failure file, in yes or no and counts, never the words."""
+    if not words:
+        return {"words_read": False}
+    facts = {"words_read": True, "label_given": bool(words["label"]),
+             "labelled_by": words["labelled_by"], "labelled_by_itself": bool(words["labelled"]),
+             "style_given": bool(words["style"])}
+    for k in ("label", "text", "said", "labelled"):
+        facts["%s_is_whole" % k] = bool(DOCUMENTS_LINK_RE.match(words[k]))
+    facts.update({"seen_names_both": _seen_names_both(words),
+                  "words_refused": any(_refused(words[k]) for k in _READINGS),
+                  "hidden_elements": words["hidden_elements"], "text_length": len(words["text"]),
+                  "said_length": len(words["said"]), "seen_length": len(words["seen"]),
+                  "taken": _reads_as_documents_link(words)})
+    return facts
 
 
 def open_statements(page, wait_ms: int = _SHOW_MS) -> bool:
@@ -643,9 +804,15 @@ def _open_accounts_menu(page, way: dict):
     buttons = _accounts_buttons(page)
     way["accounts_buttons_shown"] = len(buttons)
     way["accounts_menu_pressed"] = False
-    if len(buttons) != 1 or not is_accounts_button(_label_of(buttons[0])):
+    if len(buttons) != 1:
         return None
-    button = buttons[0]
+    # Not the first of them by its place, which is found again at every read
+    # and at the press, and could be another button by then. This one has
+    # to be the only button of that name that shows, each time, or the read
+    # or the press fails and nothing is pressed.
+    button = page.get_by_role("button", name=ACCOUNTS_BUTTON_RE).filter(visible=True)
+    if not is_accounts_button(_label_of(button)):
+        return None
     try:
         if (button.get_attribute("aria-expanded", timeout=_READ_MS) or "").lower() != "false":
             return None
@@ -695,8 +862,9 @@ def goto_documents(page, way: Optional[dict] = None) -> bool:
     signed-in site, or a signed-in page with no such control, stops the run
     with what to do, since the address is never typed.
 
-    `way` is told which menu was opened and whether the link showed, the
-    facts a stop here carries, for Diagnose to write down."""
+    `way` is told which menu was opened, whether the link showed and how
+    its own words read, the facts a stop here carries, for Diagnose to
+    write down."""
     way = {} if way is None else way
     dismiss_overlay(page)
     if _signed_in_area(page.url or "") and _shows_a_pdf(page):
@@ -735,10 +903,13 @@ def goto_documents(page, way: Optional[dict] = None) -> bool:
                 break
     way["menu_pressed"] = menu_pressed
     way["documents_link_shown"] = link is not None
-    # The link's own words are read again, and must be its whole name as
-    # well as words the guard lets through.
-    said = _label_of(link) if link is not None else ""
-    if link is None or not DOCUMENTS_LINK_RE.match(said) or not is_safe_control(said):
+    # The link's own words are read again, and one reading of them must be
+    # its whole name as well as words the guard lets through, with no
+    # reading saying what the guard refuses (_reads_as_documents_link).
+    words = _own_words(link) if link is not None else None
+    if link is not None:
+        way["documents_link_read"] = _how_the_link_read(words)
+    if link is None or not _reads_as_documents_link(words):
         # The menu that was opened is left open and nothing more is
         # pressed, so the failure file counts what it shows.
         if accounts is not None:
@@ -750,10 +921,18 @@ def goto_documents(page, way: Optional[dict] = None) -> bool:
             {"menu_pressed": menu_pressed,
              "menu_button_shown": _menu_button(page) is not None,
              "hidden_documents_links": _documents_controls_hidden(page), **way})
-    pressing.click(page, link, css="%s, %s, [role=menuitem]" % (pressing.LINKS, pressing.BUTTONS),
-                   what="the Statements & Documents link", words=_words(),
-                   step="open the statements page")
-    for _ in range(40):
+    tabs_before = len(page.context.pages)
+    address_before = page.url or ""
+    try:
+        pressing.click(page, link, css="%s, %s, [role=menuitem]" % (pressing.LINKS, pressing.BUTTONS),
+                       what="the Statements & Documents link", words=_words(),
+                       step="open the statements page")
+    except pressing.Stop as stop:
+        # The stop says how the link was reached and read as well as why
+        # the press did not go through.
+        stop.facts = {**way, **stop.facts}
+        raise
+    for _ in range(_OPEN_MS // 500):
         if _on_edocs(page.url or "") or looks_signed_out(page):
             break
         page.wait_for_timeout(500)
@@ -761,7 +940,11 @@ def goto_documents(page, way: Optional[dict] = None) -> bool:
     if looks_signed_out(page):
         return False
     if not _on_edocs(page.url or ""):
-        raise _cannot_open("the link did not open the statements page")
+        # Whether the press took this tab somewhere else or opened another
+        # tab, never where, since the address carries the session.
+        raise _cannot_open("the link did not open the statements page", {
+            **way, "address_changed": (page.url or "") != address_before,
+            "tabs_opened": max(0, len(page.context.pages) - tabs_before)})
     open_statements(page)
     return True
 
