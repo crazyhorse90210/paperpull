@@ -57,16 +57,15 @@ signed installer and automatic updates. Or download it free from the
 is held back from the free build. See [Support](#support).
 
 Seventy-one providers are supported today, all built on the same pattern.
-Six more, SBA, Verizon Mobile,
-Meijer, American Family, Stripe and FedEx, are built and waiting for someone with an account to
+Seven more, SBA, Verizon Mobile,
+Meijer, American Family, Stripe, FedEx and Bank of America, are built and waiting for someone with an account to
 test them ([#28](https://github.com/rheeloaded/paperpull/issues/28),
 [#31](https://github.com/rheeloaded/paperpull/issues/31),
 [#42](https://github.com/rheeloaded/paperpull/issues/42),
 [#45](https://github.com/rheeloaded/paperpull/issues/45),
 [#53](https://github.com/rheeloaded/paperpull/issues/53),
-[#54](https://github.com/rheeloaded/paperpull/issues/54)), and Bank of America is a first shell
-waiting for a tester to Record a trip to a statement
-([#121](https://github.com/rheeloaded/paperpull/issues/121)):
+[#54](https://github.com/rheeloaded/paperpull/issues/54),
+[#121](https://github.com/rheeloaded/paperpull/issues/121)):
 
 | App | Provider | Documents | Notes |
 |-----|----------|-----------|-------|
@@ -84,7 +83,7 @@ waiting for a tester to Record a trip to a statement
 | [`applecard`](apps/applecard) | Apple Card and Apple Savings | Apple Card statements, Savings statements, tax forms | **Confirmed by [@watling777](https://github.com/watling777)**, whose Pilot and full run saved every statement and the 1099-INT forms. Requested in [#52](https://github.com/rheeloaded/paperpull/issues/52) |
 | [`bestbuy`](apps/bestbuy) | Best Buy | Online, store-order and in-store receipts, and returns | **Built on the maintainer's own account, 35 purchases back to 2015.** The history through the page's own query a year at a time, each details page saved as the receipt, nothing clicked but the year menu, real Edge/Chrome, paced for Best Buy's bot protection |
 | [`bilt`](apps/bilt) | Bilt Card (serviced by Cardless) | Card statements | **Contributed by [@JasperDale420](https://github.com/JasperDale420), 8 statements saved on a full run.** Only the card's balance summary, View statements and a statement's own button are pressed, and the PDF is taken from the tab it opens |
-| [`bofa`](apps/bofa) | Bank of America | Statements | **Untested, a first shell waiting for a tester. Have an account? [Help test it](apps/bofa/README.md#help-test-it-no-programming-needed)** It opens the site for you to sign in and nothing more, so Record can follow one trip to a statement. Requested in [#121](https://github.com/rheeloaded/paperpull/issues/121) |
+| [`bofa`](apps/bofa) | Bank of America | Checking, savings and credit card statements | **Untested, built from a tester's two recordings and not run on an account yet. Have one? [Help test it](apps/bofa/README.md#help-test-it-no-programming-needed)** Statements & Documents' own list and PDF links, read from inside the page, nothing clicked. Requested in [#121](https://github.com/rheeloaded/paperpull/issues/121) |
 | [`capitalone`](apps/capitalone) | Capital One | Bank and card statements, tax forms, letters | Ported by [@davidrudnick](https://github.com/davidrudnick); fresh live pilot pending |
 | [`chase`](apps/chase) | Chase (credit cards) | Card statements | Real Edge/Chrome; per-card accordions + year picker |
 | [`chasebusiness`](apps/chasebusiness) | Chase Business (business document center) | Business checking and business card statements, up to seven years | **Contributed by [@JasperDale420](https://github.com/JasperDale420), 10 checking statements and the business card's first statement saved on full runs.** One profile so far, so a debit account's statements are untested. Seven kinds of control pressed through the guard, real Edge/Chrome |
@@ -864,8 +863,7 @@ Every contribution keeps the **read-only, local, no-credentials** design, see
 ## Status & roadmap
 
 - ✅ All **seventy-eight** apps pass their tests, the seventy-one that are
-  supported, the six still waiting for a tester and the Bank of America
-  shell, 30,677 of them
+  supported and the seven still waiting for a tester, 30,677 of them
   across the repo. Most are in regular use by the author. The rest were built or
   confirmed by people who hold those accounts, named in the table above
   and in [Thanks](#thanks).

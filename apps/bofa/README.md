@@ -1,78 +1,95 @@
 # Bank of America statement downloader
 
-Will download your own **Bank of America statements** as PDFs, for your
-records. Read-only, delete-safe, and part of [PaperPull](../../README.md).
+Downloads your own **Bank of America statements** as PDFs, checking,
+savings and credit card accounts alike, for your records. Read-only,
+delete-safe, and part of [PaperPull](../../README.md).
 
-**NOT BUILT YET.** This is a first shell, made for
-[issue #121](https://github.com/rheeloaded/paperpull/issues/121). It opens
-Bank of America's site in a browser profile of its own so you can sign in,
-and it lets Record and Diagnose watch the page you leave open. That is all
-it does. Discover, Pilot and Run All say it is not built yet and stop,
-Resume says nothing has been listed yet, and nothing is listed or
-downloaded. Which page lists statements and
-how a statement's PDF arrives cannot be seen without an account, so the
-real app is built from a recording of one trip to a statement, made by
-someone who banks there.
+**UNTESTED.** Built on 2026-10-25 from two recordings a tester made on
+[issue #121](https://github.com/rheeloaded/paperpull/issues/121), one trip
+to a checking statement and one to a credit card statement, and not run on
+an account yet. If you bank with Bank of America, a Pilot run tells whether
+it works, see below. Tax forms are not covered yet.
+
+## How it reads the site
+
+Statements & Documents fills its list from a call of its own, one account
+and one year at a time, and draws a Download PDF link for each statement.
+The app reloads that page, keeps the list call the page makes, and
+asks every account's statements the same way from inside the page, year by
+year, at a person's pace, and reloads the page again only when what it
+heard is five minutes old, in a long run. It learns the form of the page's
+own Download PDF links and asks for each statement at its own address in
+that form. Nothing on the page is pressed.
+
+A statement is filed only when its text names its own day and account
+better than any statement it could be taken for, the other accounts'
+statements of that day and its own account's either side of it. Anything
+else goes to `Manual Review`, a file the bank names for another day than
+its statement among them, and is never filed. Anything on the page that does not fit what the recordings
+showed stops the run, with a failure file that says what, rather than a
+guess.
 
 ## Help test it, no programming needed
 
-1. Install PaperPull from the [latest release](https://github.com/rheeloaded/paperpull/releases/latest)
-   and open the control panel.
+1. Install PaperPull from the [latest release](https://github.com/rheeloaded/paperpull/releases/latest),
+   or update your checkout, and open the control panel.
 2. Click **add a provider** and tick **Bank of America**. Pick it in the
    App list.
 3. Click **Login**. Your own Edge or Chrome opens on bankofamerica.com,
-   with a separate profile. Sign in yourself, answer any code it sends,
-   and leave the window open.
-4. In that window, open the page with your statements on it, the way you
-   normally would.
-5. Click **more** under the buttons, then **Record**. Go back to the
-   browser and click your way to one statement PDF, at your normal pace,
-   then come back and click **Stop recording**. It writes
-   `Diagnostics\recording.json`, records nothing you type and reads no
-   cookies. The whole walkthrough is
-   [Testing a provider](../../docs/testing-a-provider.md).
-6. Open `recording.json` in Notepad and read it through. If anything in it
-   looks personal, delete that line.
-7. Attach it to [issue #121](https://github.com/rheeloaded/paperpull/issues/121),
-   with a sentence or two about anything the recording cannot show, such
-   as how far back the statements go or whether a card's statements sit
-   apart from checking's.
+   with a separate profile. Sign in yourself and answer any code it sends.
+4. In that window, open **Statements & Documents**, the way you normally
+   would, and leave the window there.
+5. Click **Pilot**. It lists every account's statements and downloads the
+   newest five into the `Statements` folder. To try a single statement
+   first, run it from a terminal with `--max-docs 1`, for example
+   `python paperpull.py bofa pilot --max-docs 1` in a checkout.
+6. Look at what landed. A statement in `Statements` was checked against
+   its day and account. One in `Manual Review` was not filed, and the run
+   says why.
+7. Say on [issue #121](https://github.com/rheeloaded/paperpull/issues/121)
+   whether the statements are the right ones, and paste any line that
+   starts with `Waited for`.
 
-**If a run stops early, send the file it wrote.** Once this app is built,
-a run that fails leaves a `failure-*.json` in the `Diagnostics` folder and
-prints where it put it. It says which step broke and what the page looked
-like at the time, as counts and states, with no text from your account in
-it. Attach it to the issue the same way. This first build stops before it
-reads anything, so a Discover or Pilot that says it is not built yet
-writes none.
+**If a run stops early, send the file it wrote.** Every failed run leaves a
+`failure-*.json` in the `Diagnostics` folder and prints where it put it. It
+says which step broke and what the page looked like at the time, as counts
+and states, with no text from your account in it. Attach it to the issue
+the same way. **Diagnose**, under **more**, writes one too while the window
+is on Statements & Documents, saying what the list answered as counts and
+names only.
 
 ## Sign-in
 
 Sign-in uses your own installed Edge or Chrome, in a separate profile. You
 sign in yourself, answer your own code, and leave the window open. The app
-never sees your password. Login says what the window shows, a sign-in form
-or a check, and since this first build does not read your accounts it
-never says you are signed in.
+never sees your password. Login says you are signed in only when the
+statements list answered, so it asks you to open Statements & Documents
+first.
 
 ## Safety
 
 Bank of America moves money, through transfers, Zelle and bill pay. This
-first build presses nothing on the bank's pages at all. Login opens the
-home page in a tab of its own only when no tab of yours is on the site,
-and Diagnose reads the page you left open and follows nothing. Every
-address it will act on is on `bankofamerica.com`.
+app presses nothing on the bank's pages at all. It reloads Statements &
+Documents to hear its list, at the start and every five minutes of a long
+run, and asks for lists and PDFs from inside
+the signed-in page the way the page itself does, every address on
+`bankofamerica.com`. Login opens the home page in a tab of its own only
+when no tab of yours is on the site. An expired session stops the run
+rather than reporting an empty success.
 
 ## Commands
 
 ```
 paperpull bofa setup
-paperpull bofa login        sign in yourself, leave the window open
+paperpull bofa login        sign in, open Statements & Documents, leave it open
+paperpull bofa discover     list every account's statements, download nothing
+paperpull bofa pilot        the newest five (add --max-docs 1 for one)
+paperpull bofa all          everything, delete-safe on a rerun
+paperpull bofa resume       carry on after a run that stopped
+paperpull bofa verify       re-check every saved PDF
+paperpull bofa diagnose     survey the page and its statements list
 paperpull bofa record       record one trip to a statement, press Enter to stop
-paperpull bofa diagnose     survey the page you left open, download nothing
 ```
-
-Discover, Pilot and All say this app is not built yet and stop, and Resume
-says nothing has been listed yet.
 
 ## Tests
 

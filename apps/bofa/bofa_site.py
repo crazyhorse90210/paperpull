@@ -1,37 +1,71 @@
-"""Bank of America's site, as far as this first shell knows it.
+"""Bank of America's site. When the site changes, repair this file only.
 
-When the site changes, repair this file only.
+STATUS, built 2026-10-25 from two recordings by the tester on #121, one trip
+to a checking statement and one to a credit card statement, and NOT RUN on
+an account yet. Every part below that a recording could not show is found
+on the page at run time, and anything that does not fit what the
+recordings showed stops the run rather than being guessed at.
 
-STATUS, NOT BUILT (#121). This is the shell a tester signs in with and
-Records in. It opens www.bankofamerica.com in a browser profile of its own,
-the person signs in there themselves, and Record and Diagnose watch the tab
-they leave open. Which page lists statements, how an account or a year is
-picked and how a statement's PDF arrives are not known, and nothing here
-guesses at them. Discover and every download raise NotBuilt, which says to
-Record one trip to a statement, since a recording is what the real app is
-written from (docs/testing-a-provider.md).
+HOW THE STATEMENTS PAGE WORKS, as the recordings showed it
 
-What this shell does know is how to tell a sign-in form, which is a
-password field on the page. It knows no shape of a signed-in page, so it
-never says a session is signed in. That waits for the recording.
+  Statements & Documents is a page on secure.bankofamerica.com whose path
+  ends in "stmts-docs". It fills its list from one call of its own.
 
-SAFETY. A bank, with checking, savings, credit cards, Zelle, transfers and
-bill pay.
-  Strictly READ-ONLY, and in this shell nothing is pressed at all. No
-  function here clicks, types, selects, submits a form or confirms a
-  dialog. The one navigation is opening the home page, in a tab this run
-  opened itself, when no tab of the person's is on Bank of America's site.
-  The guard below is what Record marks each control a person pressed
-  against, and what the real build will hold every press to. Every host but
-  bankofamerica.com and its subdomains is refused.
+    list   POST https://secure.bankofamerica.com/<three words>/statements/v1/<word>Documents
+           body {<account key>, docCategoryId, year, lang}
+           ->  {documentList: [{docId, docTypeId, docDisplayName, docCategory,
+                                docCategoryId, date, dateString,
+                                accountDisplayName, <account key>, ...}],
+                accountList: [{accountDisplayName, productCode, <account key>,
+                               selected, ...}],
+                documentCategoryList: [{docCategoryName, docCategoryId}],
+                yearList: ["2026", ...], status, errorInfo}
+
+  One account, one category and one year per call. Checking, savings and
+  cards are all in accountList, so one page lists every account's
+  statements. A statement's row has a "Download PDF for <month> Statement
+  for <account>" link whose address opens the PDF in a new tab, and the
+  file is named eStmt_<date>.pdf.
+
+  The recordings write every word off the page as its shape, so the three
+  words of the list's address, the account key's name and the PDF link's
+  address are not in them. So the app learns them from the page itself.
+  It reloads the statements page the person left open, a navigation and
+  never a press, keeps the list call the page makes (its address, the
+  body's names and the headers it sent), and reads the PDF links the page
+  draws. A link's address is learned as a form, the address with each of
+  its row's own values in it marked, and is taken only when every link the
+  page drew comes out of the same form. Each other statement's PDF is asked
+  for at its own row's address in that form, from inside the page with the
+  page's own session.
+
+  IDENTITY is the account, the date and the title, with the docId as a
+  hint (paperpull_core.keys.told_apart numbers two of one day and one
+  account name). A PDF is filed only when its text names its own row
+  better than any it could be taken for (paperpull_core.identity), and a
+  file the bank names for another day than its row is never filed.
+
+SAFETY. A bank, with checking, savings, credit cards, Zelle, transfers
+and bill pay.
+  Strictly READ-ONLY, and nothing is pressed at all. No function here
+  clicks, types, selects, submits a form or confirms a dialog. The page is
+  reloaded to hear its list call, at the start of a run and again when what
+  was heard is FRESH_SECONDS old, and lists and PDFs are asked for
+  from inside the signed-in page, every address on bankofamerica.com. The
+  guard below is what Record and Diagnose mark each control against.
 """
 from __future__ import annotations
 
 import logging
 import re
-from typing import List, Optional
+import time
+from typing import List, Optional, Tuple
+from urllib.parse import quote, urlsplit
 
+from paperpull_core import intake
 from paperpull_core.controls import SETTINGS_CONTROL_RE, AUTH_CONTROL_RE
+from paperpull_core.characters import whole_json
+from paperpull_core.dates import checked as _checked_date, full_year
 # Everything on its way into a diagnostic file goes through here.
 from paperpull_core.redact import redact, set_private_words  # noqa: F401
 from paperpull_core.urls import is_safe_url as _host_allows
@@ -40,6 +74,8 @@ log = logging.getLogger("bofa_docs.site")
 
 # Every host this app will read from. Anything else is refused.
 ALLOWED_HOSTS = ("bankofamerica.com",)
+# Where online banking and its statements live.
+SECURE_HOST = "secure.bankofamerica.com"
 
 BASE = "https://www.bankofamerica.com"
 URLS = {
@@ -49,34 +85,54 @@ URLS = {
     "login": BASE + "/",
 }
 
-# Diagnose writes this down, so a survey file says it came from a shell.
-NOT_MAPPED = ("Bank of America is not built yet. This first build only opens "
-              "the site for a sign-in, and Record and Diagnose.")
+# The statements page, by the part of its path the recordings kept.
+STATEMENTS_PAGE_RE = re.compile(r"stmts-docs", re.I)
+# The list call, by the shape both recordings showed, letter for letter.
+# Words of eight, fifteen and four letters, then statements/v1/ and a word
+# of six letters before Documents.
+LIST_PATH_RE = re.compile(r"^/[A-Za-z]{8}/[A-Za-z]{15}/[A-Za-z]{4}/statements/v1/[A-Za-z]{6}Documents$")
+# A call that names a change is never taken for the list, whatever its shape.
+CHANGING_PATH_RE = re.compile(r"delete|remove|update|save|edit|change|create|send|order|request",
+                              re.I)
+# The body's names besides the account key, as both recordings showed them.
+BODY_NAMES = ("docCategoryId", "year", "lang")
+# A statement's PDF link, by the words of its name.
+DOWNLOAD_LINK_RE = re.compile(r"^\s*Download PDF for\b", re.I)
+# The statements category, by its name in documentCategoryList.
+STATEMENTS_CATEGORY_RE = re.compile(r"^\s*statements?\s*$", re.I)
+# A docId shorter than this could sit inside an address by chance.
+MIN_ID = 6
+# Headers the page sent that the browser sets on its own, never sent again.
+_BROWSER_HEADERS = re.compile(r"^(:.*|cookie|host|content-length|connection|origin|referer|"
+                              r"user-agent|accept-encoding|accept-language|priority|"
+                              r"sec-.*|upgrade-insecure-requests|dnt)$", re.I)
+# Bank of America's bot protection is not known, so the list is asked for
+# at a person's pace, account by account and year by year.
+PACE_MS = 1200
+# How long a learned list call is trusted before the page is heard again.
+FRESH_SECONDS = 300
 
-# What Discover, Pilot, Run All, Resume and every download say instead of
-# guessing. Plain words, no address, nothing from a page.
-NOT_BUILT = (
-    "Bank of America is not built yet, so this run lists and downloads "
-    "nothing. This first build opens the site for you to sign in, and "
-    "nothing more. To help build it, sign in with Login, then press Record "
-    "(under more) and click your way to one statement the way you always "
-    "do, then Stop recording. The recording.json it writes in this "
-    "provider's Diagnostics folder is what the real app is built from. "
-    "Read it through, then attach it to issue #121 on GitHub. Every run "
-    "but Login, Record and Diagnose stops until it is built.")
-
-
-class NotBuilt(RuntimeError):
-    """Asked for a list or a document this first build cannot read."""
-
-    def __init__(self, what: str = ""):
-        super().__init__(NOT_BUILT)
-        self.what = what
+# Diagnose writes this down, so a survey file says it came from this build.
+NOT_MAPPED = ""
 
 
 class SessionExpired(RuntimeError):
-    """Bank of America answered with a sign-in page instead of a document.
-    Nothing in this shell raises it yet. The engine stops a run on it."""
+    """Bank of America answered with a sign-in or a refusal instead."""
+
+
+class NotThere(RuntimeError):
+    """The tab is not on the statements page, so nothing was asked."""
+
+
+class NotLearned(RuntimeError):
+    """What the statements page does did not fit what the recordings
+    showed, so nothing was guessed. The message is fixed words only."""
+
+
+class ListCut(RuntimeError):
+    """The list could not be read whole, so the run stops before it could
+    call anything missing from it absent. The message is fixed words and
+    counts only."""
 
 
 def is_safe_url(url: str) -> bool:
@@ -85,6 +141,13 @@ def is_safe_url(url: str) -> bool:
     The check itself lives in the core, so all of them answer the same way.
     This app keeps the hosts, which is the part that really is its own."""
     return _host_allows(url, ALLOWED_HOSTS)
+
+
+def _on_secure(url: str) -> bool:
+    try:
+        return is_safe_url(url) and (urlsplit(url).hostname or "").lower() == SECURE_HOST
+    except ValueError:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -214,25 +277,554 @@ def open_home(page) -> bool:
     try:
         page.goto(URLS["home"], wait_until="domcontentloaded", timeout=30000)
     except Exception as e:
-        log.info("home page failed: %s", e)
+        log.info("home page failed: %s", type(e).__name__)
     try:
         return is_safe_url(page.url or "")
     except Exception:
         return False
 
 
-# -- what this first build cannot do yet ---------------------------------------
+def on_statements_page(page) -> bool:
+    """The tab is on Statements & Documents and shows no sign-in form."""
+    try:
+        url = page.url or ""
+    except Exception:
+        return False
+    if not _on_secure(url) or not STATEMENTS_PAGE_RE.search(urlsplit(url).path or ""):
+        return False
+    return not looks_signed_out(page)
+
+
+# ---------------------------------------------------------------------------
+# Dates
+# ---------------------------------------------------------------------------
+_MONTHS = {m: i for i, m in enumerate(
+    ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"), 1)}
+
+
+def parse_date(text) -> str:
+    """A YYYY-MM-DD date out of what the list gives, or "". Each of the
+    ways a list writes a day is read, and a day that cannot exist is
+    refused."""
+    s = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not s:
+        return ""
+    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})(?!\d)", s)
+    if m:
+        return _checked_date("%s-%s-%s" % m.groups(), "")
+    m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{2}|\d{4})$", s)
+    if m:
+        month, day, year = int(m.group(1)), int(m.group(2)), m.group(3)
+        y = int(year) if len(year) == 4 else full_year(int(year))
+        return _checked_date("%04d-%02d-%02d" % (y, month, day), "")
+    m = re.match(r"^([A-Za-z]{3,9})\.? (\d{1,2}),? (\d{4})$", s)
+    if m and m.group(1)[:3].lower() in _MONTHS:
+        return _checked_date("%s-%02d-%02d" % (m.group(3), _MONTHS[m.group(1)[:3].lower()],
+                                               int(m.group(2))), "")
+    return ""
+
+
+def row_date(row: dict) -> str:
+    """The statement's day, from date and dateString. Where both say a day
+    and they disagree, which is which cannot be told, so neither is taken."""
+    a = parse_date(row.get("date"))
+    b = parse_date(row.get("dateString"))
+    if a and b and a != b:
+        return ""
+    return a or b
+
+
+def date_in_file_name(disposition: str) -> str:
+    """The day in the file name the bank gave a PDF, eStmt_<date>.pdf, or ""."""
+    m = re.search(r"filename\*?=[^;]*?(\d{4}-\d{2}-\d{2})", disposition or "", re.I)
+    return _checked_date(m.group(1), "") if m else ""
+
+
+# ---------------------------------------------------------------------------
+# Hearing the page's own list call
+# ---------------------------------------------------------------------------
+_learned = {"at": 0.0, "call": None}
+
+
+class Call:
+    """The list call as the page made it, kept in memory for this run only
+    and never written anywhere. `account_key` is the name the body and the
+    lists give an account by."""
+
+    def __init__(self, url, headers, body, account_key, answer, template, links, link_host=""):
+        self.url = url
+        self.headers = headers
+        self.body = body
+        self.account_key = account_key
+        self.answer = answer
+        self.template = template
+        self.links = links
+        self.link_host = link_host       # the host the page's own PDF links were on
+        # What the page's own answer said of itself, which every other
+        # answer has to say too (_post_list).
+        self.status = answer.get("status")
+
+    @property
+    def accounts(self) -> list:
+        k = self.account_key
+        return [a for a in (self.answer.get("accountList") or [])
+                if isinstance(a, dict) and isinstance(a.get(k), str) and a.get(k)]
+
+    @property
+    def statements_category(self) -> str:
+        for c in self.answer.get("documentCategoryList") or []:
+            if (isinstance(c, dict) and STATEMENTS_CATEGORY_RE.match(str(c.get("docCategoryName") or ""))
+                    and str(c.get("docCategoryId") or "")):
+                return str(c["docCategoryId"])
+        return ""
+
+    @property
+    def years(self) -> list:
+        return [y for y in (str(v).strip() for v in self.answer.get("yearList") or [])
+                if re.fullmatch(r"\d{4}", y)]
+
+
+def _is_list_call(request) -> bool:
+    try:
+        if (request.method or "").upper() != "POST":
+            return False
+        u = urlsplit(request.url or "")
+    except Exception:
+        return False
+    try:
+        sends = str((request.headers or {}).get("content-type") or "")
+    except Exception:
+        sends = ""
+    return (u.scheme == "https" and (u.hostname or "").lower() == SECURE_HOST
+            and bool(LIST_PATH_RE.match(u.path or "")) and not u.query
+            and not CHANGING_PATH_RE.search(u.path or "")
+            # The body is sent again as JSON, so it has to have been JSON.
+            and "json" in sends.lower())
+
+
+def _is_list_answer(body) -> bool:
+    return (isinstance(body, dict) and isinstance(body.get("documentList"), list)
+            and isinstance(body.get("accountList"), list))
+
+
+def account_key_of(body: dict, answer: dict) -> str:
+    """The name the body gives the account by, the one name in it besides
+    BODY_NAMES, and only when the account the page has selected carries
+    the same value under that name. "" when that cannot be told."""
+    if not isinstance(body, dict):
+        return ""
+    others = [k for k in body if k not in BODY_NAMES]
+    if len(others) != 1:
+        return ""
+    k = others[0]
+    value = body.get(k)
+    if not isinstance(value, str) or not value:
+        return ""
+    selected = [a for a in answer.get("accountList") or []
+                if isinstance(a, dict) and a.get("selected") is True]
+    if len(selected) != 1 or selected[0].get(k) != value:
+        return ""
+    return k
+
+
+_LINKS_JS = r"""() => Array.from(document.querySelectorAll('a[href]')).map(a => ({
+  name: ((a.getAttribute('aria-label') || a.innerText || '').replace(/\s+/g, ' ').trim()).slice(0, 300),
+  href: String(a.href || '').slice(0, 2000)
+})).filter(x => /^\s*Download PDF for\b/i.test(x.name)).slice(0, 200)"""
+
+
+def download_links(page) -> list:
+    """The address of each "Download PDF for ..." link the page drew, on
+    bankofamerica.com only. Read, never pressed."""
+    try:
+        # The page's own links, at most two hundred of them, read in the
+        # page. No answer's body is read here.
+        got = page.evaluate(_LINKS_JS)
+    except Exception as e:
+        log.info("the PDF links could not be read: %s", type(e).__name__)
+        return []
+    return [x["href"] for x in got or [] if isinstance(x, dict)
+            and DOWNLOAD_LINK_RE.match(str(x.get("name") or "")) and is_safe_url(str(x.get("href") or ""))]
+
+
+def _marker(name: str, quoted: bool) -> str:
+    return "\x00%s%s\x00" % ("q:" if quoted else "", name)
+
+
+# What a value written into an address as it is may hold. Anything else
+# would change what the address asks for, so it is written escaped or not
+# at all.
+_PLAIN = re.compile(r"^[A-Za-z0-9._~-]+$")
+
+
+def _whole(value: str) -> re.Pattern:
+    """A value in an address standing whole, never the start or the end of
+    a longer run of letters and digits, so DOC0099 is not found in DOC00992."""
+    return re.compile(r"(?<![A-Za-z0-9])%s(?![A-Za-z0-9])" % re.escape(value))
+
+
+def template_of(href: str, row: dict) -> Optional[str]:
+    """The address of a row's link as a form, each of the row's own values
+    in it marked by the name of its field, or None when the row's docId is
+    not in it whole. Longest values first, so one value inside another is
+    never taken for it."""
+    doc_id = row.get("docId")
+    if not isinstance(doc_id, str) or len(doc_id) < MIN_ID:
+        return None
+    fields = sorted(((k, v) for k, v in row.items() if isinstance(v, str) and len(v) >= MIN_ID),
+                    key=lambda kv: -len(kv[1]))
+    out = href
+    used = set()
+    for name, value in fields:
+        enc = quote(value, safe="")
+        if _PLAIN.match(value) and _whole(value).search(out):
+            out = _whole(value).sub(lambda m: _marker(name, False), out)
+            used.add(name)
+        elif enc != value and _whole(enc).search(out):
+            out = _whole(enc).sub(lambda m: _marker(name, True), out)
+            used.add(name)
+    return out if "docId" in used else None
+
+
+def fill(template: str, row: dict) -> Optional[str]:
+    """A row's own address in the form, or None when the row lacks a field
+    the form needs, or holds a value that would change what the address
+    asks for where the form writes it as it is."""
+    def put(m):
+        quoted, name = bool(m.group(1)), m.group(2)
+        value = row.get(name)
+        if not isinstance(value, str) or not value:
+            raise KeyError(name)
+        if quoted:
+            return quote(value, safe="")
+        if not _PLAIN.match(value):
+            raise KeyError(name)
+        return value
+
+    try:
+        return re.sub(r"\x00(q:)?([^\x00]+)\x00", put, template)
+    except KeyError:
+        return None
+
+
+def learn_template(rows: list, links: list) -> Tuple[Optional[str], int]:
+    """The one form every link the page drew comes out of, and how many
+    links it was learned from. None when no link holds a row's docId, or
+    when two links come out of different forms."""
+    forms = set()
+    matched = 0
+    for href in links:
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            t = template_of(href, row)
+            if t is not None and fill(t, row) == href:
+                forms.add(t)
+                matched += 1
+                break
+    if len(forms) != 1:
+        return None, matched
+    return forms.pop(), matched
+
+
+def learn(page, wait_ms: int = 25000) -> Call:
+    """Reload the statements page and keep the list call it makes, and the
+    form of its PDF links. Raises NotThere, SessionExpired or NotLearned."""
+    if not on_statements_page(page):
+        raise NotThere("the tab is not on Statements & Documents")
+    got = {}
+
+    def on_response(r):
+        if "answer" in got:
+            return
+        try:
+            req = r.request
+            if not _is_list_call(req):
+                return
+            body = whole_json(intake.json_of(r))
+        except Exception:
+            return
+        got["status"] = r.status
+        if not _is_list_answer(body):
+            return
+        try:
+            sent = whole_json(req.post_data_json)
+        except Exception:
+            sent = None
+        try:
+            headers = req.all_headers()
+        except Exception:
+            headers = dict(req.headers or {})
+        got["url"] = req.url
+        got["body"] = sent if isinstance(sent, dict) else None
+        got["headers"] = {k: v for k, v in (headers or {}).items() if not _BROWSER_HEADERS.match(k)}
+        got["answer"] = body
+
+    page.on("response", on_response)
+    try:
+        try:
+            page.reload(wait_until="domcontentloaded", timeout=60000)
+        except Exception as e:
+            log.info("the statements page would not reload: %s", type(e).__name__)
+        waited = 0
+        while "answer" not in got and waited < wait_ms:
+            page.wait_for_timeout(500)
+            waited += 500
+    finally:
+        try:
+            page.remove_listener("response", on_response)
+        except Exception:
+            pass
+    if got.get("status") in (401, 403) or looks_signed_out(page):
+        raise SessionExpired("Bank of America showed a sign-in page")
+    if "answer" not in got:
+        raise NotLearned("the statements page made no list call this app knows")
+    if not got.get("body"):
+        raise NotLearned("the list call's body was not one this app can read")
+    key = account_key_of(got["body"], got["answer"])
+    if not key:
+        raise NotLearned("the list call names its account in a way this app cannot tell")
+    if any(not (isinstance(a, dict) and isinstance(a.get(key), str) and a.get(key))
+           for a in got["answer"].get("accountList") or []):
+        # An account it could not ask for would be missing from a list
+        # taken as whole.
+        raise NotLearned("an account in the list has no key this app can read")
+    if got["answer"].get("errorInfo"):
+        raise NotLearned("the page's own list answered with an error")
+    # The page draws its rows after its answer comes.
+    links = []
+    for _ in range(16):
+        links = download_links(page)
+        if links:
+            break
+        page.wait_for_timeout(500)
+    template, _matched = learn_template(got["answer"].get("documentList") or [], links)
+    hosts = {(urlsplit(h).hostname or "").lower() for h in links}
+    call = Call(got["url"], got["headers"], got["body"], key, got["answer"], template, len(links),
+                link_host=hosts.pop() if len(hosts) == 1 else "")
+    if call.template is not None and not call.link_host:
+        call.template = None
+    if not call.statements_category:
+        raise NotLearned("the list names no Statements category")
+    _learned.update(at=time.monotonic(), call=call)
+    return call
+
+
+def learned(page) -> Call:
+    """The list call heard in this run, heard again when it is old."""
+    call = _learned.get("call")
+    if call is None or time.monotonic() - _learned["at"] > FRESH_SECONDS:
+        call = learn(page)
+    return call
+
+
+def forget() -> None:
+    _learned.update(at=0.0, call=None)
+
+
+# ---------------------------------------------------------------------------
+# Asking from inside the page
+# ---------------------------------------------------------------------------
+_LIST_JS = r"""async ([url, headers, body]) => {
+  const t = new URL(url, location.href);
+  if (t.protocol !== 'https:' || t.hostname !== 'secure.bankofamerica.com') {
+    throw new Error('Refusing an off-host request');
+  }
+  const h = Object.assign({}, headers || {});
+  h['Content-Type'] = h['Content-Type'] || h['content-type'] || 'application/json';
+  delete h['content-type'];
+  const r = await fetch(t.href, {method: 'POST', credentials: 'include', headers: h,
+                                 body: JSON.stringify(body), redirect: 'error'});
+  const raw = await ppRead(r);
+  let j = null;
+  try { j = JSON.parse(new TextDecoder().decode(raw)); } catch (e) {}
+  return {status: r.status, url: r.url, json: j};
+}"""
+
+_PDF_JS = r"""async (url) => {
+  const t = new URL(url, location.href);
+  const host = t.hostname;
+  if (t.protocol !== 'https:' || !(host === 'bankofamerica.com' || host.endsWith('.bankofamerica.com'))) {
+    throw new Error('Refusing an off-host request');
+  }
+  const r = await fetch(t.href, {credentials: 'include', redirect: 'follow'});
+  const end = new URL(r.url || t.href);
+  if (end.protocol !== 'https:' || !(end.hostname === 'bankofamerica.com' ||
+                                     end.hostname.endsWith('.bankofamerica.com'))) {
+    // Followed off the site. Its body is never read.
+    return {status: r.status, url: r.url, ct: '', cd: '', b64: ''};
+  }
+  const bytes = await ppRead(r);
+  let bin = ''; const CH = 0x8000;
+  for (let i = 0; i < bytes.length; i += CH) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+  }
+  return {status: r.status, url: r.url, ct: r.headers.get('content-type') || '',
+          cd: r.headers.get('content-disposition') || '', b64: btoa(bin)};
+}"""
+
+
+def _post_list(page, call: Call, body: dict) -> dict:
+    if not _on_secure(call.url):
+        raise ValueError("refusing a list call off secure.bankofamerica.com")
+    if not on_statements_page(page):
+        raise NotThere("the tab is not on Statements & Documents")
+    try:
+        r = intake.evaluate(page, _LIST_JS, [call.url, call.headers, body])
+    except Exception as e:
+        # A redirect to a sign-in, a page gone mid-run or an answer over
+        # its limit. Which cannot be told, and the list is not whole.
+        raise ListCut("a list call failed in the page (%s)" % type(e).__name__)
+    status = r.get("status") if isinstance(r, dict) else None
+    if status in (401, 403):
+        raise SessionExpired("Bank of America answered %s" % status)
+    if status != 200 or not _is_list_answer(r.get("json")):
+        raise ListCut("a list call answered %s" % (status if isinstance(status, int) else "nothing"))
+    answer = whole_json(r["json"])
+    # An answer that says something else of itself than the page's own did,
+    # or carries an error, may have left statements out.
+    if answer.get("status") != call.status or answer.get("errorInfo"):
+        raise ListCut("a list call answered with an error")
+    return answer
+
+
+def statement_row(row, account: dict, key: str, category_id: str, year: str = "") -> Optional[dict]:
+    """One statement of the list, or None for a row of another category or
+    another account. Raises ValueError for a statement row it cannot read,
+    so the list is never taken as whole without it. `year` is the year the
+    list was asked for, which is where its download looks for it again."""
+    if not isinstance(row, dict):
+        raise ValueError("a row that is not a record")
+    if not str(row.get("docCategoryId") or ""):
+        raise ValueError("a row that names no category")
+    if str(row.get("docCategoryId")) != category_id:
+        return None
+    if key in row and row.get(key) != account.get(key):
+        # A statement of another account in this account's answer, or the
+        # account written another way. Neither is taken as this one's.
+        raise ValueError("a statement under another account's key")
+    doc_id = row.get("docId")
+    if not isinstance(doc_id, str) or len(doc_id) < MIN_ID:
+        raise ValueError("a statement with no id")
+    date = row_date(row)
+    if not date:
+        raise ValueError("a statement with no day this app can read")
+    title = re.sub(r"\s+", " ", str(row.get("docDisplayName") or "")).strip() or "Statement"
+    name = re.sub(r"\s+", " ", str(row.get("accountDisplayName") or account.get("accountDisplayName") or "")).strip()
+    return {"title": title, "date": date, "account": name, "category": "Statement",
+            "document_id": doc_id, "account_ref": account[key], "year": year or date[:4]}
+
+
+def _body_for(call: Call, account: dict, year: str) -> dict:
+    body = dict(call.body)
+    body[call.account_key] = account[call.account_key]
+    body["docCategoryId"] = call.statements_category
+    body["year"] = year
+    return body
+
+
+def list_account_year(page, call: Call, account: dict, year: str) -> Tuple[List[dict], list]:
+    """One account's statements of one year, read whole or ListCut, and the
+    years that answer names, which can be the account's own."""
+    answer = _post_list(page, call, _body_for(call, account, year))
+    rows, unread = [], 0
+    for row in answer.get("documentList") or []:
+        try:
+            got = statement_row(row, account, call.account_key, call.statements_category, year)
+        except ValueError:
+            unread += 1
+            continue
+        if got is not None:
+            rows.append(got)
+    if unread:
+        raise ListCut("%d statement(s) in a list could not be read" % unread)
+    years = [y for y in (str(v).strip() for v in answer.get("yearList") or [])
+             if re.fullmatch(r"\d{4}", y)]
+    return rows, years
+
 
 def collect_documents(page, keep=None, config: Optional[dict] = None) -> List[dict]:
-    """Every statement and tax form the accounts list. Not built, so this
-    refuses rather than read a page it does not know."""
-    raise NotBuilt("the list of statements")
+    """Every account's statements, year by year. `keep` is the run's scope
+    predicate over year labels. The years asked for an account are the
+    page's own and every year an answer for that account names. Raises
+    NotThere, SessionExpired, NotLearned or ListCut, and never answers with
+    part of a list."""
+    call = learn(page)
+    if not call.accounts:
+        raise NotLearned("the list names no account")
+    if not call.years:
+        raise NotLearned("the list names no year")
+    rows: List[dict] = []
+    first = True
+    for account in call.accounts:
+        asked, waiting = set(), list(call.years)
+        while waiting:
+            year = waiting.pop(0)
+            if year in asked:
+                continue
+            asked.add(year)
+            if keep is not None and not keep(year):
+                continue
+            if not first:
+                page.wait_for_timeout(PACE_MS)
+            first = False
+            got, years = list_account_year(page, call, account, year)
+            rows.extend(got)
+            waiting.extend(y for y in years if y not in asked and y not in waiting)
+    rows.sort(key=lambda r: (r["account"], r["account_ref"], r["date"], r["title"], r["document_id"]))
+    return rows
 
 
-def download_document(page, *args, **kwargs) -> bool:
-    """Save one document. Not built, so this refuses rather than press or
-    fetch anything."""
-    raise NotBuilt("a statement's PDF")
+# ---------------------------------------------------------------------------
+# One statement's PDF
+# ---------------------------------------------------------------------------
+def fresh_row(page, call: Call, account_ref: str, year: str, document_id: str) -> Optional[dict]:
+    """The statement's row as the list gives it now, by its docId, held to
+    what a row of the list is held to (statement_row), or None."""
+    for account in call.accounts:
+        if account.get(call.account_key) != account_ref:
+            continue
+        answer = _post_list(page, call, _body_for(call, account, year))
+        for row in answer.get("documentList") or []:
+            if isinstance(row, dict) and row.get("docId") == document_id:
+                try:
+                    ok = statement_row(row, account, call.account_key,
+                                       call.statements_category, year)
+                except ValueError:
+                    return None
+                return row if ok is not None else None
+    return None
+
+
+def document_bytes(page, *, account_ref: str, date: str, document_id: str,
+                   year: str = "") -> Tuple[Optional[bytes], str]:
+    """One statement's PDF, asked for at its own row's address in the form
+    the page's links came out of, and the day in the file name the bank
+    gave it ("" when it gave none). (None, "") when its row is no longer
+    listed. Raises NotThere, SessionExpired or NotLearned."""
+    call = learned(page)
+    if call.template is None:
+        raise NotLearned("the statements page drew no Download PDF link this app could read")
+    if not (account_ref and document_id and date):
+        return None, ""
+    row = fresh_row(page, call, account_ref, year or date[:4], document_id)
+    if row is None or row_date(row) != date:
+        return None, ""
+    url = fill(call.template, row)
+    if not url or not is_safe_url(url) or (urlsplit(url).hostname or "").lower() != call.link_host:
+        raise NotLearned("a statement's address did not come out where the page's own links are")
+    try:
+        r = intake.evaluate(page, _PDF_JS, url)
+    except Exception as e:
+        # A page gone mid-run, an answer over its limit, or a fetch the
+        # browser refused. The run stops rather than fail every statement.
+        raise ListCut("a statement could not be asked for in the page (%s)" % type(e).__name__)
+    status = r.get("status") if isinstance(r, dict) else None
+    if status in (401, 403) or not is_safe_url(r.get("url") or ""):
+        raise SessionExpired("Bank of America answered %s" % status)
+    if status != 200 or not r.get("b64"):
+        return b"", ""
+    return intake.decode(r["b64"]), date_in_file_name(r.get("cd") or "")
 
 
 # ---------------------------------------------------------------------------
@@ -292,13 +884,38 @@ def _page_summary(page) -> dict:
     return out
 
 
+def learned_summary(call: Call) -> dict:
+    """What was learned of the list call, as names and counts, never a
+    value. Field names are the bank's own words and go through the word
+    list that writes the file."""
+    rows = [r for r in call.answer.get("documentList") or [] if isinstance(r, dict)]
+    fields = sorted({k for r in rows for k in r})
+    form_fields = sorted(set(re.findall(r"\x00(?:q:)?([^\x00]+)\x00", call.template or "")))
+    return {"accounts": len(call.accounts), "years": len(call.years),
+            "categories": len(call.answer.get("documentCategoryList") or []),
+            "statements_category": bool(call.statements_category),
+            "rows_on_the_page": len(rows), "row_fields": fields,
+            "body_names": sorted(call.body), "headers_kept": len(call.headers),
+            "pdf_links": call.links, "pdf_form_learned": call.template is not None,
+            "pdf_form_fields": form_fields}
+
+
 def survey(page, dwell_ms: int = 2000) -> dict:
-    """What the page the person left open looks like, without following,
-    pressing or downloading anything."""
-    report = {"pages": [], "responses": [], "mapped": False}
+    """What the page the person left open looks like, and on the statements
+    page what its list call answers, without pressing or downloading
+    anything. The page is reloaded once to hear the call."""
+    report = {"pages": [], "responses": [], "mapped": True}
     try:
         page.wait_for_timeout(dwell_ms)
     except Exception:
         pass
     report["pages"].append(_page_summary(page))
+    if on_statements_page(page):
+        try:
+            report["list"] = learned_summary(learn(page))
+        except (NotThere, NotLearned, SessionExpired) as e:
+            # Which way it stopped, by the name of the stop only.
+            report["list"] = {"stopped": type(e).__name__}
+    else:
+        report["list"] = {"stopped": "NotThere"}
     return report
