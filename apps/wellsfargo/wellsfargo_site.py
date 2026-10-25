@@ -1272,9 +1272,10 @@ _SIZE_RE = re.compile(r"\(\s*\d[\d,.]*\s*[KM]B?\s*,\s*PDF\s*\)", re.I)
 # name whatever comes before it (fresh reviews of this port). Letters that
 # are no form's run into the number from the next word, as in "Checking
 # ****1099View statement" where two spans touch, and leave a mask a mask
-# (fresh review of the port to SBA and American Family). A next word that
-# starts with a form's letter and a dash, as E-Statement does, still reads
-# as a form's name.
+# (fresh review of the port to SBA and American Family). So does a form's
+# letter with a dash and a letter after it, as in "Checking
+# ****1099E-Statement", which names an E-Statement and no form (fresh review
+# of the port of SBA's fixes to this app).
 _DOTS = chr(0x2022) + chr(0x25CF) + chr(0x00B7)
 _DASHES = "".join(chr(c) for c in range(0x2010, 0x2016)) + r"\-"
 _MASKED_RE = re.compile(
@@ -1285,7 +1286,8 @@ _MASKED_RE = re.compile(
     % {"dots": _DOTS, "ellipsis": chr(0x2026), "dashes": _DASHES}, re.I)
 _FORM_SUFFIXES = ("A", "B", "C", "CAP", "DA", "DIV", "E", "ESA", "F", "G", "H", "INT", "K", "LS", "LTC", "MA",
                   "MISC", "NEC", "OID", "PATR", "Q", "QA", "R", "S", "SA", "SB", "T")
-_FORM_NAME_RE = re.compile(r"[%s]?(?:%s)(?![a-z])" % (_DASHES, "|".join(_FORM_SUFFIXES)), re.I)
+_FORM_NAME_RE = re.compile(r"[%s]?(?:%s)(?![a-z]|[%s][a-z])" % (_DASHES, "|".join(_FORM_SUFFIXES), _DASHES),
+                           re.I)
 
 
 def _names_a_tax_form(words: str) -> bool:
@@ -1295,6 +1297,24 @@ def _names_a_tax_form(words: str) -> bool:
         if m.group(1) and not _FORM_NAME_RE.match(words, m.end()) and _MASKED_RE.search(words, 0, m.start()):
             continue
         return True
+    return False
+
+
+def _names_a_form_only_by_a_mask(words: str) -> bool:
+    """Whether the only form `words` name is the last digits of a masked
+    number, which _TAX_RE takes for a form and _names_a_tax_form does not."""
+    return bool(_TAX_RE.search(words)) and not _names_a_tax_form(words)
+
+
+def _reads_past_a_mask(own: str, chain) -> bool:
+    """Whether the careful reading of a kind (_kind_of) meets words whose
+    only form is a masked number's last digits, in the control's own words
+    or around it, before or where it finds the words that decide the kind."""
+    for words in [own, *chain]:
+        if _names_a_form_only_by_a_mask(words):
+            return True
+        if _names_a_tax_form(words) or _STATEMENT_RE.search(words):
+            return False
     return False
 
 
@@ -1541,7 +1561,19 @@ def _read_control(el, index: int, wait: Optional[int] = _READ_MS) -> Optional[_S
     # leave a control for a person, never file one this reading would not.
     kind_near = _kind_of(words, chain[:int(where.get("bounded") or 0)], _TAX_RE.search)
     kind_as_before = "tax" if _TAX_AS_BEFORE_RE.search(_unsized(name + " " + ("" if named else row_text))) else "statement"
-    doubt = "date" if iso != iso_as_before else ("kind" if not kind == kind_near == kind_as_before else "")
+    # A masked number's last digits never decide a kind. Where the careful
+    # reading reads past such digits to the words that decide it, the
+    # readings without the rule for masked digits take them for a form, or
+    # never read the words climbed to, so their agreeing says nothing. A
+    # statement whose link names only the digits and its date was filed as a
+    # Tax Document under a heading of statements and tax documents, and a
+    # 1099 printed after a bullet beside a link naming only its date was
+    # filed as a statement, as 0.58.0 filed both (fresh review of the port of
+    # SBA's fixes to this app). So such a control is left for a person, and
+    # held as the kind those readings filed it as.
+    by_a_mask = _reads_past_a_mask(words, chain)
+    doubt = "date" if iso != iso_as_before else (
+        "kind" if by_a_mask or not kind == kind_near == kind_as_before else "")
     held = kind_near if doubt == "kind" and kind_near == kind_as_before else ""
     return _Seen(index, name, href, iso or iso_as_before, kind, int(where.get("row") or 0),
                  tuple(where.get("up") or ()), doubt, held)

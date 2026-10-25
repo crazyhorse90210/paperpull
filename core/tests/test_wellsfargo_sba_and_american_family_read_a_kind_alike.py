@@ -10,7 +10,12 @@ review of that port found two more shapes the rules saved wrongly and fixed
 them in SBA and American Family, and Wells Fargo kept saving them wrongly
 until they were ported back. A masked number followed by letters that are
 no form's name, "Checking ****1099View statement", was a form's number, and
-a hidden field or a control shown only on hover stopped the climb. A fix
+a hidden field or a control shown only on hover stopped the climb. The
+fresh review of that port back found two shapes all three copies saved
+wrongly, a masked number all a control's own words named of a form, read as
+a tax form by a heading above it, and "****1099E-Statement" read as a
+form's name, and they were fixed in all three at once, a control whose kind
+is read past a masked number's digits now left for a person. A fix
 that reaches one copy and not the others leaves the others making the wrong
 save. So this holds the three copies alike, the patterns they read words
 with, the functions that read a kind and decide what is filed, held or
@@ -52,14 +57,14 @@ OWN_NAMES = {"amfam": {"_A_TAX_FORM_RE": "_TAX_RE", "_A_STATEMENT_KIND_RE": "_ST
 MASK_WORDS = {"amfam": "policy", "wellsfargo": "card|loan"}
 # The functions and classes that read a kind or hold its answers, the same
 # code in all three apps once their own names are read as SBA's.
-SAME_CODE = ("_names_a_tax_form", "_unsized", "_kind_of", "_rows_of", "_held_as", "kind_of_title",
-             "_Found", "_Survey")
+SAME_CODE = ("_names_a_tax_form", "_names_a_form_only_by_a_mask", "_reads_past_a_mask", "_unsized", "_kind_of",
+             "_rows_of", "_held_as", "kind_of_title", "_Found", "_Survey")
 # Where each app reads a control's words and decides what is filed and what
 # is held.
 READER = {"sba": "_read_control", "amfam": "_reading", "wellsfargo": "_read_control"}
 # The lines of that reading that read its words and decide. The old reading
 # of a kind, kind_as_before, reads each app's own row and is not compared.
-READING_LINES = ("words", "chain", "kind", "kind_near", "doubt", "held")
+READING_LINES = ("words", "chain", "kind", "kind_near", "by_a_mask", "doubt", "held")
 # What else reads a control and chooses the one to press, the same code in
 # Wells Fargo and SBA. American Family reads its rows and finds a control
 # again in its own ways, so only the parts above are compared there.

@@ -31,6 +31,33 @@ All notable changes to PaperPull are recorded here. Versioning follows
   Found by the fresh review of the SBA and American Family port and proven
   in a browser before the change. The statement links a tester's recording
   shows name their own kind and date, which neither shape touches.
+- **Wells Fargo, SBA and American Family leave two more look-alike
+  statements for a person.** A statement whose link names only an account's
+  masked number ending 1099 and its date, as
+  `Checking ****1099 01/31/2026 PDF` does, under a heading or beside words
+  that name tax documents, was filed as a Tax Document, in 0.58.0 as in
+  0.57.1. The two readings without the rule for masked digits took the
+  digits for the form, and the careful reading took its kind from the tax
+  words around the link, so all three agreed. And a masked number running
+  into E-Statement or E-Bill, as in `Checking ****1099E-Statement` or
+  `Policy ****1099-E-Bill`, was read as a form's name, since E is a form's
+  letter, as in 1098-E. A form's letter with a dash and a letter after it
+  now starts another word. A masked number's last digits now never decide
+  a kind either way. A control whose kind the careful reading finds only by
+  reading past such digits, in its own words or in the words around it, is
+  left for a person, counted in Diagnose and held as the kind the other
+  readings filed it as, so the day's real 1099 beside the first statement
+  is still refused as its twin. That also leaves for a person a 1099 named
+  after a bullet beside a link naming only its date, which 0.58.0 filed as
+  a statement. The fresh review of this change found that the dash rule
+  alone did the same to a 1099-R named "1099-R-IRA distribution" after a
+  bullet. The change is the same in all three apps, and the test
+  that holds their readers alike holds it. Found by the fresh review of the
+  Wells Fargo change above and proven in a browser before the change. The
+  statement links a tester's recording shows name their own kind and date,
+  so neither shape touches them. A form whose link names only a masked
+  number and its date, and a link naming only its date beside a masked
+  number, are now left for a person even where the row names the form.
 
 ## [0.58.0] - 2026-10-24
 

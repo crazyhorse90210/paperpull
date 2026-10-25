@@ -1340,3 +1340,122 @@ def test_a_form_s_own_name_is_still_read_beside_its_size(page, words, date):
     among them, which is how a 1099-MISC may be written."""
     page.set_content(_page(_marked("g-tax", words, date)))
     assert _found(site.collect_download_docs(page)) == [(DAY, "tax", TAX)]
+
+
+# --- the shapes the fresh review of the Wells Fargo port of these fixes found ---
+#
+# The fixes this port took from its review went into the Wells Fargo app,
+# and a fresh review there found two shapes all three apps filed as a Tax
+# Document by all three readings. A bill's statementPDF link naming the
+# policy's masked number, ending 1099, and its date, under words that name
+# tax documents, and a masked number with a dash and E-Bill after it. Each is
+# now left for a person.
+
+MASKED_STATEMENT_LINK = "<a data-cy='statementPDF' data-guid='g-masked'>Policy ****1099 01/31/2026 PDF</a>"
+
+
+@pytest.mark.parametrize("content", [
+    _blocks("<div><h2>Statements and tax documents</h2><form action='#'><div>%s</div></form></div>"
+            % MASKED_STATEMENT_LINK),
+    _blocks("<div><h2>Statements and tax documents</h2><form action='#'>"
+            "<input type='hidden' name='id' value='7'><div>%s</div></form></div>" % MASKED_STATEMENT_LINK),
+    _blocks("<div><h2>Tax documents</h2><div>%s</div></div>" % MASKED_STATEMENT_LINK),
+    _blocks("<table><tbody><tr><td>Statements and tax documents</td><td>%s</td></tr></tbody></table>"
+            % MASKED_STATEMENT_LINK),
+], ids=["under a heading", "beside a hidden field", "under a heading of tax documents alone",
+        "in a row naming tax documents"])
+def test_a_bill_naming_only_a_masked_number_is_never_filed_as_a_tax_form_by_words_around_it(page, presses,
+                                                                                           tmp_path, content):
+    """The bill's statementPDF link names the policy's masked number and its
+    date and no kind. The careful reading without the rules and the old
+    reading took the digits for the form, and the careful reading took them
+    for the policy's and read tax documents in the words above the link or
+    beside it, so all three agreed and the bill was saved as the day's Tax
+    Document. Two readings that agree only through the digits say nothing of
+    its kind, so it is left for a person."""
+    page.set_content(content)
+    docs = site.collect_download_docs(page)
+    assert _found(docs) == [] and docs.unsure == 1
+    saved, trace = _download(page, tmp_path, TAX)
+    assert not saved and presses == [], (presses, trace)
+    assert _refusals(trace) == [NONE_OF_THIS_KIND], trace
+
+
+def test_a_bill_left_for_a_person_for_its_masked_number_still_stops_the_day_s_1099(page, presses, tmp_path):
+    """It is held as the tax form all three readings filed it as, so the
+    day's 1099-INT beside it is still refused as its twin, as it was
+    before."""
+    page.set_content(_blocks("<div><h2>Statements and tax documents</h2><div>%s</div></div>" % MASKED_STATEMENT_LINK,
+                             TAX_ROW))
+    docs = site.collect_download_docs(page)
+    assert [(d.title, d.rows) for d in docs] == [(TAX, 2)] and docs.unsure == 1
+    saved, trace = _download(page, tmp_path, TAX)
+    assert not saved and presses == [], (presses, trace)
+    assert _refusals(trace) == [TWO_ROWS], trace
+
+
+@pytest.mark.parametrize("row", [MASKED_ROW % policy for policy in (
+    "Policy ****1099-E-Bill", "Policy ****1099-E-Statement", "Policy ****1099%sE%sBill" % (EN_DASH, EN_DASH))]
+    + ["<div data-cy='statementRow' data-guid='r-masked'><span>Statement date 01/31/2026</span> "
+       "<a data-cy='statementPDF' data-guid='g-masked'>Policy ****1099-E-Statement PDF</a></div>"],
+    ids=["E-Bill after a hyphen", "E-Statement after a hyphen", "en dashes", "in a statementPDF link's own words"])
+def test_a_masked_number_with_a_dash_and_e_bill_after_it_is_still_the_policy_s(page, presses, tmp_path, row):
+    """The bill prints the policy's masked number with a dash and E-Bill or
+    E-Statement after it. E is a form's letter, as in 1098-E, and the dash
+    after it was taken for the end of the form's name, so the digits named
+    a form and the bill was saved as the day's Tax Document. A form's letter
+    with a dash and a letter after it starts another word, so the bill is
+    left for a person, and the day's other bill is still its own."""
+    page.set_content(_page(row))
+    docs = site.collect_download_docs(page)
+    assert _found(docs) == [] and docs.unsure == 1
+    saved, trace = _download(page, tmp_path, TAX)
+    assert not saved and presses == [], (presses, trace)
+    page.set_content(_page(STATEMENT_ROW, row))
+    docs = site.collect_download_docs(page)
+    assert _found(docs) == [(DAY, "statement", STATEMENT)] and docs.unsure == 1
+    saved, trace = _download(page, tmp_path, STATEMENT)
+    assert saved and presses == ["g-statement"], (presses, trace)
+
+
+@pytest.mark.parametrize("words", ["Annuity ****1099-R Distributions", "Annuity ****1099-R-2025"],
+                         ids=["a space after the letter", "a dash and a year after the letter"])
+def test_a_form_s_letters_before_a_space_or_a_dash_and_a_year_still_name_the_form(page, words):
+    """A form's letters after a masked number still name the form when a
+    space, or a dash and a number, follow them."""
+    page.set_content(_page(_form_row(words)))
+    assert _found(site.collect_download_docs(page)) == [(DAY, "tax", TAX)]
+
+
+@pytest.mark.parametrize("words", ["%s1099-R-Annuity distribution" % BULLET, "%s1099 Annuity distribution" % BULLET,
+                                   "Annuity ****1099-R-IRA"],
+                         ids=["a 1099-R after a bullet with a word after it", "a 1099 after a bullet",
+                              "a form's letter and a word after a mask"])
+def test_a_link_naming_only_its_date_beside_a_masked_number_is_filed_as_neither(page, presses, tmp_path, words):
+    """A form's statementPDF link names only its date, for a screen reader,
+    beside the form's number printed after a bullet or a mask. The careful
+    reading took the digits for a policy's and read no other kind around the
+    link, the other two readings read nothing around it, and all three filed
+    it as a bill. A 1099 after a bullet was saved as the day's bill that
+    way, and once a form's letter with a dash and a letter after it was no
+    form's name, so was a 1099-R-Annuity. A masked number's digits never
+    decide a kind, so it is left for a person."""
+    page.set_content(_page(OTHER_DAY_ROW, "<div><span>%s</span> %s</div>" % (words, DATED_BY_NAME_LINK)))
+    docs = site.collect_download_docs(page)
+    assert _found(docs) == [("2025-12-31", "statement", "Account Statement - December 31, 2025")]
+    assert docs.unsure == 1
+    saved, trace = _download(page, tmp_path, STATEMENT)
+    assert not saved and presses == [], (presses, trace)
+
+
+def test_a_bill_link_naming_its_kind_under_a_masked_policy_is_still_filed(page, presses, tmp_path):
+    """A bill's statementPDF link names itself a statement and its date, for
+    a screen reader, under a heading printing the policy's masked number.
+    Its own words decide its kind before that number is read, so it is
+    filed and pressed as before."""
+    page.set_content(_blocks("<div><h2>Auto policy ****1099</h2><div><a data-cy='statementPDF' data-guid='g-statement'"
+                             " aria-label='Statement, January 31, 2026'><span>PDF</span></a></div></div>"))
+    docs = site.collect_download_docs(page)
+    assert _found(docs) == [(DAY, "statement", STATEMENT)] and docs.unsure == 0
+    saved, trace = _download(page, tmp_path, STATEMENT)
+    assert saved and presses == ["g-statement"], (presses, trace)
