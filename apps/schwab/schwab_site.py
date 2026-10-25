@@ -15,6 +15,7 @@ import time as _time
 from datetime import date as _date
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from urllib.parse import urlsplit
 
 from paperpull_core import intake
 from paperpull_core.controls import SETTINGS_CONTROL_RE, AUTH_CONTROL_RE
@@ -277,11 +278,14 @@ def dismiss_timeout(page) -> None:
 
 def on_documents_page(page) -> bool:
     try:
-        url = (page.url or "").lower()
+        url = page.url or ""
         # Schwab moved Statements & Tax Forms from /app/ to /retail/ in
-        # October 2026; either path is the same page.
-        if not any(p in url for p in ("/app/accounts/statements",
-                                      "/retail/accounts/statements")):
+        # October 2026, and either path is the same page. Only the page's
+        # own path counts, on Schwab's own host, never an address named in
+        # its query or after its #, as a sign-in page's return address is.
+        path = urlsplit(url).path.lower()
+        if not is_safe_url(url) or not any(p in path for p in (
+                "/app/accounts/statements", "/retail/accounts/statements")):
             return False
         if looks_signed_out(page):
             return False

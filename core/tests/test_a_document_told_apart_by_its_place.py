@@ -641,8 +641,9 @@ def test_resume_never_takes_the_one_still_listed_for_the_other_when_ids_do_not_l
 # -- the numbering itself ------------------------------------------------------
 
 def test_with_no_id_kept_the_numbers_are_those_an_archive_already_has():
-    """told_apart numbers as stable_occurrences does whenever no id decides,
-    so every key an archive has stays."""
+    """told_apart numbers as stable_occurrences does whenever no id decides
+    and the archive was numbered by the same fields, so every key an archive
+    has stays."""
     from paperpull_core.keys import stable_occurrences, told_apart
     fields = ("doc_type", "title", "date")
 
@@ -667,3 +668,237 @@ def test_with_no_id_kept_the_numbers_are_those_an_archive_already_has():
         got = [occurrence for occurrence, _sure in told_apart(
             rows, existing, fields=fields)]
         assert got == stable_occurrences(rows, existing, fields=fields), (rows, existing)
+
+
+def test_rows_alike_take_every_number_their_records_hold():
+    """One account's two documents alike, numbered 1 and 2 across accounts,
+    listed again with ids that answer nothing. They keep 1 and 2 in any
+    order, and neither is given 0, which no record of that account holds.
+    Each account is numbered on its own, as up to 0.33."""
+    from paperpull_core.keys import told_apart
+    fields = ("doc_type", "title", "date", "account")
+
+    def row(account):
+        return {"doc_type": "BANK", "title": "Monthly Statement", "date": DATE,
+                "account": account, "document_id": "new"}
+
+    def known(*pairs):
+        return {"k%d" % i: dict(row(account), occurrence=occurrence, document_id="old%d" % i)
+                for i, (account, occurrence) in enumerate(pairs)}
+
+    across = known(("A", 0), ("B", 1), ("B", 2))
+    for accounts, want in [("ABB", [0, 1, 2]), ("BBA", [1, 2, 0]), ("BAB", [1, 0, 2])]:
+        got = [occurrence for occurrence, _sure in told_apart(
+            [row(a) for a in accounts], across, fields=fields)]
+        assert got == want, accounts
+    each = known(("A", 0), ("B", 0))
+    assert [occurrence for occurrence, _sure in told_apart(
+        [row("B"), row("A")], each, fields=fields)] == [0, 0]
+    # A third alike in the account takes a number neither record holds.
+    assert [occurrence for occurrence, _sure in told_apart(
+        [row("B"), row("B"), row("B")], across, fields=fields)] == [1, 2, 0]
+
+
+# -- two accounts' documents of one day --------------------------------------
+#
+# Both apps keep a document under its account, and up to 0.33 their sites
+# numbered each account's documents on their own. From 0.34 to 0.58 they
+# were numbered across accounts, so a statement saved at 0 in a second
+# account found 0 taken by the first, was numbered 1, and was downloaded
+# again beside the one saved (#122). An archive numbered either way keeps
+# every number it has and fetches nothing again. Each document here is named
+# by its account's letter, A or B.
+
+class CapitalOneAccounts(Provider):
+    """Two bank accounts' statements of one day."""
+
+    ACCOUNTS = {"A": ("360 Checking...1111", "REF1111"),
+                "B": ("360 Savings...2222", "REF2222")}
+
+    def __init__(self, site, monkeypatch):
+        super().__init__()
+        self.site = site
+        monkeypatch.setattr(site, "ensure_documents", lambda page: True)
+        monkeypatch.setattr(site, "_fetch_json", self._json)
+        monkeypatch.setattr(site, "fetch_pdf",
+                            lambda page, doc_type, ref, rec: self.pdf(rec["document_id"]))
+
+    def _json(self, page, url, headers, body=None):
+        listed = []
+        if url == self.site.API["search"]:
+            listed = [{"documentId": i, "documentType": self.site.TYPE_BANK_STATEMENT,
+                       "documentCategory": "STATEMENT", "documentName": "Monthly Statement",
+                       "documentDate": day, "description": self.ACCOUNTS[i[0]][0],
+                       "account": {"accountReferenceId": self.ACCOUNTS[i[0]][1]}}
+                      for i, day in self.listed()]
+        return {"status": 200, "body": {"documents": listed}}
+
+
+class SchwabAccounts(Provider):
+    """Two brokerage accounts' trade confirmations of one day."""
+
+    ACCOUNTS = {"A": ("11111111", "Brokerage"), "B": ("22222222", "Example Trust")}
+
+    def __init__(self, site, monkeypatch):
+        super().__init__()
+        self.site = site
+        monkeypatch.setattr(site, "ensure_statements", lambda page: True)
+        monkeypatch.setattr(site, "_gateway_call", self._call)
+        monkeypatch.setattr(site, "fetch_pdf", lambda page, doc: self.pdf(doc["documentId"]))
+
+    def _call(self, page, url, headers, post_body=None):
+        if url == self.site.API["accounts"]:
+            body = {"accountSelectorData": {"brokerageAccountList": {"brokerageAccounts": [
+                {"id": number, "nickName": nick} for number, nick in self.ACCOUNTS.values()]}}}
+        else:
+            body = {"documents": [
+                {"documentId": i, "documentName": "Confirm - EXAMPLE - Bought",
+                 "type": self.site.TYPE_CONFIRMS, "onDemandDocumentType": "TradeConfirms",
+                 "date": "%s/%s/%s" % (day[5:7], day[8:], day[:4]),
+                 "accountDisplayName": "%s-%s" % (self.ACCOUNTS[i[0]][0][:4],
+                                                  self.ACCOUNTS[i[0]][0][4:])}
+                for i, day in self.listed()]}
+        return {"status": 200, "body": body}
+
+
+TWO_ACCOUNTS = {"capitalone": CapitalOneAccounts, "schwab": SchwabAccounts}
+
+
+@pytest.fixture
+def two(request, tmp_path, monkeypatch, capsys):
+    home = Home(request.param, tmp_path, monkeypatch, capsys)
+    home.provider = TWO_ACCOUNTS[request.param](home.mod.site, monkeypatch)
+    return home
+
+
+def numbered_as(home, across: bool) -> None:
+    """Every record numbered as an earlier version numbered it, in the order
+    the list first gave them, and keyed again with that number. Up to 0.33
+    each account on its own, from 0.34 to 0.58 across accounts."""
+    stores = {name: json.loads((home.out / name).read_text(encoding="utf-8"))
+              for name in ("discovery.json", "progress.json")}
+    seen, number = {}, {}
+    for key, record in stores["discovery.json"].items():
+        group = (record["doc_type"], record["title"], record["date"])
+        if not across:
+            group += (record["account"],)
+        number[key] = seen.get(group, 0)
+        seen[group] = number[key] + 1
+    for name, records in stores.items():
+        rewritten = {}
+        for key, record in records.items():
+            record["occurrence"] = number[key]
+            base = key.split("#")[0]
+            rewritten[base + ("#%d" % number[key] if number[key] else "")] = record
+        (home.out / name).write_text(json.dumps(rewritten), encoding="utf-8")
+
+
+@pytest.mark.parametrize("two", list(TWO_ACCOUNTS), indirect=True)
+@pytest.mark.parametrize("across", [False, True], ids=["each_account", "across_accounts"])
+@pytest.mark.parametrize("lasting", [True, False], ids=["ids_last", "ids_do_not_last"])
+@pytest.mark.parametrize("listed", [["A1", "B1"], ["A1", "B1", "B2"]],
+                         ids=["one_each", "two_alike_in_one"])
+def test_an_archive_keeps_each_accounts_numbers_and_fetches_nothing_again(
+        two, across, lasting, listed):
+    two.provider.lasting = lasting
+    two.provider.ids = list(listed)
+    two.run_all()
+    assert two.on_disk() == sorted(listed)
+    numbered_as(two, across)
+    saved = sorted(json.loads((two.out / "progress.json").read_text(encoding="utf-8")))
+
+    # Listed the other way around, so no account is first by luck, and with
+    # a statement of each account on a day of its own, which is new.
+    two.provider.new_session()
+    two.provider.days = {"A9": "2026-08-12", "B9": "2026-08-12"}
+    two.provider.ids = list(reversed(listed)) + ["A9", "B9"]
+    two.provider.asked = []
+    said = two.run_all()
+    asked = [i if lasting else i.split("V")[0] for i in two.provider.asked]
+    assert sorted(asked) == ["A9", "B9"], said[-600:]
+    assert two.on_disk() == sorted(listed + ["A9", "B9"]), two.held()
+    assert two.left_for_a_person() == {}
+    known = json.loads((two.out / "discovery.json").read_text(encoding="utf-8"))
+    assert set(saved) <= set(known) and len(known) == len(saved) + 2, sorted(known)
+
+
+@pytest.mark.parametrize("two", list(TWO_ACCOUNTS), indirect=True)
+@pytest.mark.parametrize("lasting", [True, False], ids=["ids_last", "ids_do_not_last"])
+def test_an_archive_that_took_a_statement_again_on_0_34_takes_nothing_more(
+        two, lasting, monkeypatch):
+    """Saved up to 0.33, each account on its own, then run on 0.34 to 0.58,
+    which numbered across accounts and took the second account's statement
+    again under 1, beside the one saved at 0. Both records and both files
+    stay as they are, and nothing more is fetched."""
+    from paperpull_core.keys import told_apart
+    two.provider.lasting = lasting
+    two.provider.ids = ["A1", "B1"]
+    two.run_all()
+    numbered_as(two, across=False)
+
+    with monkeypatch.context() as m:
+        # That run's numbering, the account left out.
+        m.setattr(two.mod, "_told_apart", lambda rows, existing=None, fields=(), **kw:
+                  told_apart(rows, existing, tuple(f for f in fields if f != "account"), **kw))
+        two.provider.new_session()
+        two.run_all()
+    assert two.on_disk() == ["A1", "B1", "B1"], two.held()
+    saved = sorted(json.loads((two.out / "progress.json").read_text(encoding="utf-8")))
+    assert len(saved) == 3
+
+    for order in (["A1", "B1"], ["B1", "A1"]):
+        two.provider.new_session()
+        two.provider.ids = order
+        two.provider.asked = []
+        said = two.run_all()
+        assert two.provider.asked == [], said[-600:]
+    assert two.on_disk() == ["A1", "B1", "B1"], two.held()
+    assert two.left_for_a_person() == {}
+    known = json.loads((two.out / "discovery.json").read_text(encoding="utf-8"))
+    assert sorted(known) == saved
+
+
+def test_every_app_that_tells_documents_apart_numbers_by_its_whole_key():
+    """An app numbering documents with told_apart names, in `fields`, every
+    field its key is made of but the number. Numbered across a field its key
+    holds, two documents saved at 0 in that field's two values were one
+    group, so the second found 0 taken and was downloaded again (#122).
+
+    stable_occurrences is not held to this. Its apps whose key holds a field
+    their numbering leaves out (the category, or the account in IBKR and
+    Vanguard) have numbered the same way since each shipped, so their
+    archives were never numbered otherwise, and changing it now would."""
+    import ast
+
+    def strings(node):
+        if isinstance(node, (ast.Tuple, ast.List)):
+            return {e.value for e in node.elts if isinstance(e, ast.Constant)}
+        return None
+
+    found = {}
+    for path in sorted(REPO.glob("apps/*/*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        names = {alias.asname or alias.name for node in ast.walk(tree)
+                 if isinstance(node, ast.ImportFrom) and node.module == "paperpull_core.keys"
+                 for alias in node.names if alias.name == "told_apart"}
+        if not names:
+            continue
+        keys = [{n.attr for n in ast.walk(fn) if isinstance(n, ast.Attribute)
+                 and isinstance(n.value, ast.Name) and n.value.id == "self"} - {"occurrence"}
+                for cls in ast.walk(tree) if isinstance(cls, ast.ClassDef)
+                for fn in cls.body if isinstance(fn, ast.FunctionDef) and fn.name == "key"]
+        assert len(keys) == 1, path
+        for func in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
+            bound = {t.id: strings(n.value) for n in ast.walk(func) if isinstance(n, ast.Assign)
+                     for t in n.targets if isinstance(t, ast.Name)}
+            for call in [n for n in ast.walk(func) if isinstance(n, ast.Call)
+                         and isinstance(n.func, ast.Name) and n.func.id in names]:
+                given = [kw.value for kw in call.keywords if kw.arg == "fields"]
+                assert given, "%s numbers by title and date alone" % path.name
+                fields = (bound.get(given[0].id) if isinstance(given[0], ast.Name)
+                          else strings(given[0]))
+                assert fields is not None, "%s: fields not read" % path.name
+                assert keys[0] <= fields, "%s numbers across %s, which its key holds" % (
+                    path.name, ", ".join(sorted(keys[0] - fields)))
+                found[path.parent.name] = sorted(fields)
+    assert {"capitalone", "schwab"} <= set(found), found

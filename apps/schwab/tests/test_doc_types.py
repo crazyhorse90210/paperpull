@@ -250,7 +250,7 @@ def test_the_documents_url_is_not_read_as_signed_out():
     assert site.looks_signed_out(_Q())
 
 
-def test_the_statements_page_is_recognised_at_its_retail_address():
+def test_the_statements_page_is_recognized_at_its_retail_address():
     # Schwab moved Statements & Tax Forms from /app/ to /retail/, and the
     # old address now redirects there. Read as some other page, every run
     # stopped saying it could not open the statements page.
@@ -261,11 +261,31 @@ def test_the_statements_page_is_recognised_at_its_retail_address():
                 def count(self): return 0
             return _L()
     for url in ["https://client.schwab.com/app/accounts/statements/",
-                "https://client.schwab.com/retail/accounts/statements/#/"]:
+                "https://client.schwab.com/retail/accounts/statements/#/",
+                "https://client.schwab.com/Retail/Accounts/Statements/?tab=tax#/"]:
         page = _P(); page.url = url
         assert site.on_documents_page(page), url
     page = _P(); page.url = "https://client.schwab.com/retail/accounts/summary/"
     assert not site.on_documents_page(page)
+
+
+def test_a_page_that_only_names_the_statements_address_is_not_it():
+    # Another page whose query or # names the statements address, the way
+    # a return address does, or a host that is not Schwab's, even with a
+    # title that says statements.
+    class _P:
+        title = staticmethod(lambda: "Statements and Tax Forms | Charles Schwab")
+        def locator(self, _s):
+            class _L:
+                def count(self): return 0
+            return _L()
+    for url in ["https://client.schwab.com/retail/accounts/summary/?next=/retail/accounts/statements/",
+                "https://client.schwab.com/retail/accounts/summary/#/retail/accounts/statements",
+                "https://client.schwab.com.example.org/retail/accounts/statements/",
+                "http://client.schwab.com/retail/accounts/statements/"]:
+        page = _P(); page.url = url
+        assert not site.on_documents_page(page), url
+
 
 def test_a_verb_stem_inside_another_word_is_not_a_refusal():
     # "edit" sits inside "Credit" and "update" inside nothing common, but the
