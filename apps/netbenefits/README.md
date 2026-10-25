@@ -97,9 +97,21 @@ employer, as a combined statement would. No other employer on the sign-in
 has a name this employer's name ends with, since once a statement's line
 breaks are gone the two cannot be told apart. And every other plan on the
 sign-in is of another type, or the header named another employer on its
-own page. A plan whose name gives no type, or whose page never opened, may
-be of the same type at the same employer, and then the statement is set
-aside as before. So a
+own page. A plan whose name gives no type, and which nothing places at
+another employer, may be of the same type at the same employer, and then
+the statement is set aside as before. A plan whose page never names an
+employer (one whose page never opens, say) can be placed by its employer's
+combined statement. That statement must name it and the plan it was made
+for, the header must have named one employer on that plan's pages during
+the run, and the statement must carry that employer's name and no other
+employer's name the header named during the run. A combined statement
+saved by an earlier run is read again for this, and counts only while the
+header names the same employer for its plan as when it was made. A
+statement that waits only on such a plan is held in Manual Review, judged
+again where it waits at the end of each run that shows its plan, filed
+once something places that plan, and set aside as soon as it can be told
+it is not the plan's. It is never filed without that check, however a run
+ends. So a
 second plan of the same type at the same employer, the employer's combined
 statement and another employer's statement of that type are all still set
 aside. When a statement names other plans of the list too, it is saved

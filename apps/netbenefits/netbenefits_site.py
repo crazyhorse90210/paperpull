@@ -533,6 +533,9 @@ _plan_in_use: dict = {"plan": None}
 # The employers the site's header named on the pages that showed each plan
 # since the plan list was read, by the plan's digest (employer_of).
 _employers_seen: dict = {}
+# The combined statements read since then that name each plan, by the
+# plan's digest, each as the plan it was made for and its text (_placings).
+_employers_named: dict = {}
 
 _READ_CHOOSER_JS = r"""() => {
   if (location.protocol !== 'https:' || location.hostname !== 'workplaceservices.fidelity.com') return null;
@@ -748,6 +751,7 @@ def read_plan_choices(page):
     # Whatever plan was open may not be once these pages have loaded.
     _plan_in_use["plan"] = None
     _employers_seen.clear()
+    _employers_named.clear()
     links = _read_entries(page, CHOOSER_URL, _READ_CHOOSER_JS) or []
     exact = _plan_numbers(links)
     others = [o for o in links if not plan_ids(o.get("value") or "")]
@@ -935,7 +939,7 @@ def statement_digests(text: str) -> tuple:
     return statement_digest(text), hashlib.sha256(spaced.encode("utf-8")).hexdigest()
 
 
-def plans_named(text: str, plans, chosen: str = "") -> List[dict]:
+def plans_named(text: str, plans, chosen: str = "", every: bool = False) -> List[dict]:
     """The plans of the list whose names a statement's text carries, in the
     list's order, each once.
 
@@ -947,9 +951,10 @@ def plans_named(text: str, plans, chosen: str = "") -> List[dict]:
     A plan whose name is in a longer one's (ABC inside ABC DCP) counts only
     where it stands on its own. Two plans with one name cannot be told
     apart by it, so such a name counts only for the plan `chosen` (its
-    digest), the one the statement was made for."""
+    digest), the one the statement was made for. A plan with no address
+    is never asked for, so it is looked for only when `every` says so."""
     hay = _squeezed(text)
-    keyed = [(p, _name_key(p)) for p in plans if p.get("path")]
+    keyed = [(p, _name_key(p)) for p in plans if p.get("path") or every]
     keys = [k for _, k in keyed]
     out, seen = [], set()
     for plan, key in keyed:
@@ -1003,9 +1008,11 @@ def _bare(text: str) -> str:
 def _note_employer(page, plan: dict) -> None:
     """The employer the header names now, written down for `plan`, which
     the page shows. A header that names none says nothing either way."""
-    name = _bare(employer_name(page))
-    if name:
+    shown = employer_name(page)
+    name = _bare(shown)
+    if name and name not in _employers_seen.get(plan["digest"], set()):
         _employers_seen.setdefault(plan["digest"], set()).add(name)
+        log.info("plan %s: the header names the employer %s", plan["label"], shown)
 
 
 def employer_of(plan: dict) -> str:
@@ -1016,9 +1023,63 @@ def employer_of(plan: dict) -> str:
     return next(iter(seen)) if len(seen) == 1 else ""
 
 
+def _placings(plan: dict) -> set:
+    """The employers the combined statements read this run that name `plan`
+    place it at (note_combined), each checked again with what the header
+    has named so far. A statement places it at the employer of the plan it
+    was made for only when that employer is settled, the header having
+    named one employer on the pages that showed that plan and the text
+    carrying it, and the text carries no other employer the header named
+    for a plan of the login, so a statement read before another employer's
+    plan opened counts only while it still holds."""
+    known = {employer_of({"digest": d}) for d in _employers_seen} - {""}
+    out = set()
+    for chosen, hay in _employers_named.get(plan.get("digest")) or []:
+        employer = employer_of({"digest": chosen})
+        if employer and employer in hay and not any(e in hay for e in known - {employer}):
+            out.add(employer)
+    return out
+
+
+def placed_employer(plan: dict) -> str:
+    """The employer `plan` is at, by the header on the pages that showed it
+    (employer_of), or for a plan the header never named one for, by the
+    combined statements read since the plan list was read that name it
+    (_placings). '' when that gives none or more than one."""
+    if _employers_seen.get(plan.get("digest")):
+        return employer_of(plan)
+    placed = _placings(plan)
+    return next(iter(placed)) if len(placed) == 1 else ""
+
+
+def note_combined(text: str, chosen: str, plans) -> bool:
+    """A statement made for the plan `chosen`, written down for each other
+    plan of the list it names by its name, a plan with no address among
+    them, as an employer's combined statement names its plans. It may place
+    such a plan at the employer of `chosen` (_placings), which counts only
+    for a plan the header never named an employer for (placed_employer),
+    as #123's voluntary plan, whose page never opens. Whether it named one."""
+    named = plans_named(text, plans, chosen=chosen, every=True)
+    others = [p for p in named if p["digest"] != chosen]
+    if chosen not in {p["digest"] for p in named} or not others:
+        return False
+    hay = _bare(text)
+    for other in others:
+        _employers_named.setdefault(other["digest"], []).append((chosen, hay))
+    return True
+
+
 # A plan's type as the tax code writes it, 401(k), 403(b), 457(b) and the
-# like, with its brackets or without, in a plan's name on the list.
-_TYPE_IN_NAME_RE = re.compile(r"(?<![A-Za-z0-9])(401|403|457)\s*\(?\s*([A-Za-z])\s*\)?(?![A-Za-z0-9])")
+# like, with its brackets or without, in a plan's name on the list, after a
+# space or glued to the words before it as in #123's "EMPLOYER MEM401K".
+_TYPE_IN_NAME_RE = re.compile(r"(?<![0-9])(401|403|457)\s*\(?\s*([A-Za-z])\s*\)?(?![A-Za-z0-9])")
+
+# Why named_by_type refused when another plan may be of the type at the
+# employer. The second can change once a combined statement read later in
+# the run places that plan (note_combined), so a run holds such a statement
+# until its other statements are read.
+SAME_EMPLOYER = "another plan of this login may be of its type at its employer"
+EMPLOYER_NOT_KNOWN = "the employer of another plan that may be of its type is not known"
 
 
 def plan_type(plan: dict) -> str:
@@ -1031,9 +1092,10 @@ def plan_type(plan: dict) -> str:
 
 
 # A type anywhere in a statement's text with each run of spaces made one,
-# in brackets or as its own word, and never part of an amount or a number.
+# in brackets or not, glued to the words before it or not, as a plan's name
+# may write it, and never part of an amount or a number.
 _TYPE_IN_TEXT_RE = re.compile(r"(?<![0-9$.,])(401|403|457) ?\( ?([A-Z]) ?\)"
-                              r"|(?<![0-9$.,A-Z])(401|403|457) ?([A-Z])(?![A-Z0-9])")
+                              r"|(?<![0-9$.,])(401|403|457) ?([A-Z])(?![A-Z0-9])")
 
 
 def _types_in(text: str) -> set:
@@ -1063,9 +1125,12 @@ def named_by_type(text: str, plans, chosen: str) -> tuple:
     on the list gives one type. The site's header named one employer on the
     pages that showed the plan. The text names no other plan of the list.
     Every other plan on the login is of another type, or is at another
-    employer by the header on the pages that showed it, so a plan whose
-    name gives no type, or which no page showed, counts as one that may be
-    of this type at this employer. The text gives no type of a plan that
+    employer (placed_employer, by the header on the pages that showed it,
+    or for a plan the header never named one for, by a combined statement
+    read this run), so a plan whose name gives no type, and which nothing
+    places, counts as one that may be of this type at this employer
+    (EMPLOYER_NOT_KNOWN, which the run holds the statement for). The text
+    gives no type of a plan that
     may be at this employer, as a combined statement would. No other
     employer of the login has a name this one's ends with, since with the
     line breaks gone "West Lakeside" cannot be told from "Lakeside" after
@@ -1089,17 +1154,22 @@ def named_by_type(text: str, plans, chosen: str) -> tuple:
     others = [p for digest, p in by_digest.items() if digest != chosen]
     if any(_bare(_name_key(p)) and _bare(_name_key(p)) in hay for p in others):
         return False, "it names another plan of the list"
+    here, unknown = [], []
     for other in others:
         theirs = plan_type(other)
         if theirs and theirs != kind:
             continue
-        at = employer_of(other)
+        at = placed_employer(other)
         if not at or at == employer:
-            return False, "another plan of this login may be of its type at its employer"
-    near = {plan_type(p) for p in others if employer_of(p) in ("", employer)}
+            (unknown if not at else here).append(other["label"])
+    if here:
+        return False, "%s (%s)" % (SAME_EMPLOYER, ", ".join(here))
+    if unknown:
+        return False, "%s (%s)" % (EMPLOYER_NOT_KNOWN, ", ".join(unknown))
+    near = {plan_type(p) for p in others if placed_employer(p) in ("", employer)}
     if near & _types_in(text):
         return False, "it gives the type of another plan at its employer"
-    employers = {employer_of(p) for p in plans} - {""}
+    employers = {placed_employer(p) for p in plans} - {""}
     if any(e != employer and employer.endswith(e) for e in employers):
         return False, "another employer's name ends its employer's name"
     after_employer = False
