@@ -862,7 +862,10 @@ class App:
         """The saved statement's own check, on a login with several plans.
 
         The statement must name the plan it was made for, or it is set aside
-        for review as the wrong document and None is answered. When it is,
+        for review as the wrong document and None is answered. One that
+        gives no plan's name from the list can still name its plan by its
+        type and its employer, under the narrow rule site.named_by_type
+        holds it to, and is then this plan's alone (#123). When it is,
         by the digest of its text, the very statement another plan's request
         gave for this period and saved, naming this plan too, this copy is
         not kept, this plan is recorded as covered by that file, and None is
@@ -874,7 +877,16 @@ class App:
         for it, so a rename that fails leaves the summary it was saved by."""
         text = receipt_pdf.pdf_text(out_path)
         digest, spaced_digest = site.statement_digests(text)
-        named = site.plans_named(text, list(self._plans_by_digest.values()), chosen=doc.plan)
+        plans = list(self._plans_by_digest.values())
+        named = site.plans_named(text, plans, chosen=doc.plan)
+        if not named:
+            by_type, why = site.named_by_type(text, plans, doc.plan)
+            if by_type:
+                named = [self._plans_by_digest[doc.plan]]
+                log.info("%s %s names its plan by its type and employer", doc.title, doc.date)
+            else:
+                log.info("%s %s names no plan by name, nor by type and employer: %s",
+                         doc.title, doc.date, why)
         if doc.plan not in {p["digest"] for p in named}:
             self.stats["wrong_document"] = self.stats.get("wrong_document", 0) + 1
             self.stats["manual_review"] += 1

@@ -50,7 +50,7 @@ class Locator:
 
     def count(self):
         if "client-name" in self.sel:
-            return 1 if self.page.employer else 0
+            return 1 if self.page.header_employer() else 0
         if "password" in self.sel:
             return 1 if self.page.url.startswith(NB_LOGIN) else 0
         if "frmRequest" in self.sel:
@@ -59,7 +59,7 @@ class Locator:
 
     def inner_text(self, timeout=None):
         if "client-name" in self.sel:
-            return self.page.employer
+            return self.page.header_employer()
         return self.page.body()
 
     def all_inner_texts(self):
@@ -90,10 +90,16 @@ class Page:
         self.names = dict(NAMES)
         self.bare_probes, self.bare_redirects = 0, False
         self.employer = ""
+        # The employer the header names by the plan the site has chosen,
+        # for a plan not named here `employer`.
+        self.employers = {}
         # Where the Choose a Plan address lands, when not on its own page,
         # and what a Statements page shows besides its heading.
         self.chooser_lands = None
         self.aside = ""
+
+    def header_employer(self):
+        return self.employers.get(self.in_context, self.employer)
 
     def body(self):
         if self.kind == "chooser":
@@ -212,6 +218,7 @@ PLAN_OF_LABEL = {"ABC 457(b) Plan": P457, "North-Star Medical Group": PXR}
 @pytest.fixture(autouse=True)
 def fresh(monkeypatch):
     site._plan_in_use["plan"] = None
+    site._employers_seen.clear()
     site._last_navigation["at"] = 0.0
     site.set_private_words([])
     real = site.periods
@@ -1122,3 +1129,231 @@ def test_two_plans_of_one_name_never_count_a_one_plan_record_for_either(monkeypa
     assert (PXR, Q2) in made
     assert not [r for r in again.progress.data.values()
                 if "saved before this login had several plans" in (r.get("notes") or "")]
+
+
+# -- a statement that names its plan by its type and employer (#123) -------------------
+
+H457, H401, PVOL, P401K, X457, W457 = "41501", "41502", "41503", "41504", "41505", "41506"
+HARBOR, PINE = "Harbor City Schools", "PINE RIDGE HEALTH, INC."
+TITLE_457 = "457b Deferred Compensation Plan Retirement Savings Statement"
+# Four plans at two employers, as on #123's login, all names invented, each
+# plan's name on the list and the employer the header names on its page.
+# Pine Ridge's voluntary plan never opens, its statements being in the
+# employer's combined one.
+TYPED = {H457: ("HARBOR 457B", HARBOR), H401: ("HARBOR 401A", HARBOR),
+         PVOL: ("PINE RIDGE VOLUNTARY 403B", PINE), P401K: ("PINE RIDGE 401K", PINE)}
+OPENS = (H457, H401, P401K)
+
+
+def typed_page(plans=TYPED, behaviors=None):
+    page = Page({PVOL: "sticky"} if behaviors is None else behaviors,
+                links=[(name, LINK % p) for p, (name, _) in plans.items()], remembered=next(iter(plans)))
+    page.names = {p: name for p, (name, _) in plans.items()}
+    page.employers = {p: employer for p, (_, employer) in plans.items()}
+    return page
+
+
+def typed_plans(page, shown):
+    """The plans as listed, with the header read on the page of each plan
+    in `shown`, as opening it reads it."""
+    plans = plans_of(page)
+    for p in shown:
+        page.in_context = p
+        site._note_employer(page, plans[p])
+    return list(plans.values())
+
+
+def typed_login(monkeypatch, tmp_path, statements, plans=TYPED, behaviors=None):
+    """The login after Discover, every plan with the second quarter.
+    `statements` is what a plan's statement reads, line by line, when not
+    just its own name."""
+    page = typed_page(plans, behaviors)
+    for p, (name, _) in plans.items():
+        monkeypatch.setitem(HAVE, p, {Q2})
+        monkeypatch.setitem(STATEMENT_NAMES, p, statements.get(p, [name, "Statement Details"]))
+    monkeypatch.setattr(site, "make_statement", statements_by_plan(page, []))
+    monkeypatch.setattr(receipt_pdf, "print_html_to_pdf", render_text)
+    app = app_on(tmp_path, page)
+    app.cmd_discover(quiet=True)
+    return app, page
+
+
+def record_of(app, plan):
+    return next(r for r in app.progress.data.values() if r["plan"] == site.plan_digest(plan))
+
+
+def test_a_plans_type_comes_from_its_name_on_the_list():
+    def kind(name):
+        return site.plan_type({"heading": name, "label": site.option_label(name)})
+    assert kind("HARBOR 457B") == "457B"
+    assert kind("ABC 457(B) PLAN") == "457B"
+    assert kind("ACME 401(K) PROFIT SHARING PLAN (41401)") == "401K"
+    assert kind("Lakeside 403 (b) Plan") == "403B"
+    # No type, or two, is no type.
+    for name in ("ABC DCP", "NORTH-STAR MEDICAL GROUP", "ABC 403(B) AND 457(B) PLAN",
+                 "SUITE 403 BENEFITS", "ABC PLAN (457)", "HARBOR457B"):
+        assert kind(name) == "", name
+
+
+def test_a_statement_that_names_its_plan_by_type_and_employer_alone_is_saved(monkeypatch, tmp_path, caplog):
+    """#123. A 457(b)'s statements print a line naming the employer, then a
+    title of the plan's type, and never the name the list gives it."""
+    caplog.set_level("INFO")
+    app, page = typed_login(monkeypatch, tmp_path,
+                            {H457: [HARBOR.upper(), TITLE_457, "Your Account Summary"]})
+    app.process(app._select())
+    own = record_of(app, H457)
+    assert own["state"] == State.COMPLETED.value and own["downloaded_ok"]
+    assert own["pdf_filename"] == own["date"] + " NetBenefits Quarterly Statement - Harbor 457b.pdf"
+    assert Path(own["pdf_path"]).is_file() and not own.get("covers")
+    for p in (H401, P401K):                               # named by name, as before
+        assert record_of(app, p)["state"] == State.COMPLETED.value
+    assert app.stats.get("wrong_document", 0) == 0
+    assert app.stats["manual_review"] == 1                # the voluntary plan, left for the owner
+    assert "names its plan by its type and employer" in caplog.text
+    assert "plan Pine Ridge Voluntary 403b left for you: " + site.DID_NOT_OPEN in caplog.text
+
+
+def test_the_type_and_employer_are_found_however_pypdf_broke_the_lines():
+    plans = typed_plans(typed_page(), OPENS)
+    for text in ("HARBOR CITY SCHOOLS\n" + TITLE_457,
+                 "Statement Details Harbor City Schools457b Deferred Compensation\n"
+                 "Plan Retirement SavingsStatement",
+                 "Harbor  City\nSchools 457(b) Deferred Compensation Plan Retirement Savings Statement\n"
+                 "Balance 1,457.00 Beginning 2,401 Accounts"):
+        assert site.named_by_type(text, plans, site.plan_digest(H457)) == (True, ""), text
+
+
+def test_a_second_plan_of_the_type_at_the_employer_is_still_refused(monkeypatch, tmp_path):
+    plans = {**TYPED, X457: ("HARBOR EXECUTIVE 457B", HARBOR)}
+    statements = {p: [HARBOR, TITLE_457] for p in (H457, X457)}
+    app, page = typed_login(monkeypatch, tmp_path, statements, plans=plans)
+    app.process(app._select())
+    for p in (H457, X457):
+        rec = record_of(app, p)
+        assert rec["state"] == State.NEEDS_MANUAL_REVIEW.value and not rec.get("downloaded_ok")
+        assert "does not name the plan it was made for" in rec["notes"]
+    assert app.stats["wrong_document"] == 2
+    assert not any("457b" in p.name for p in (tmp_path / "out" / "Statements").iterdir())
+
+
+@pytest.mark.parametrize("lines", [
+    # It names the employer's other plan, as #123's combined statements do.
+    [HARBOR, TITLE_457, "HARBOR 401A", "Your Account Summary"],
+    # Or it gives each plan a title by its type alone.
+    [HARBOR, TITLE_457, HARBOR, "401(a) Money Purchase Plan Retirement Savings Statement"],
+    # Or one title, and the other plan by its type alone.
+    [HARBOR, TITLE_457, "401(a) Money Purchase Plan balance 200.00"],
+    # Or a title of no type over both plans.
+    [HARBOR, "Retirement Savings Statement", "457b Deferred Compensation Plan", "401a Plan"],
+])
+def test_the_employers_combined_statement_is_not_taken_by_type(monkeypatch, tmp_path, lines):
+    app, page = typed_login(monkeypatch, tmp_path, {H457: lines, H401: lines})
+    app.process(app._select())
+    refused = record_of(app, H457)
+    assert refused["state"] == State.NEEDS_MANUAL_REVIEW.value and not refused.get("downloaded_ok")
+    assert not refused.get("covers")
+
+
+@pytest.mark.parametrize("lines, kept", [([HARBOR, TITLE_457], True), ([PINE, TITLE_457], False)])
+def test_another_employers_statement_of_the_type_is_refused(monkeypatch, tmp_path, lines, kept):
+    """Two employers' 457(b) plans. Each one's own statement is saved, and
+    one made for Harbor's that is Pine Ridge's is not."""
+    plans = {H457: ("HARBOR 457B", HARBOR), H401: ("HARBOR 401A", HARBOR), W457: ("PINE RIDGE 457B", PINE)}
+    app, page = typed_login(monkeypatch, tmp_path, {H457: lines, W457: [PINE, TITLE_457]},
+                            plans=plans, behaviors={})
+    app.process(app._select())
+    assert record_of(app, W457)["state"] == State.COMPLETED.value
+    harbor = record_of(app, H457)
+    assert harbor["state"] == (State.COMPLETED if kept else State.NEEDS_MANUAL_REVIEW).value
+    assert app.stats.get("wrong_document", 0) == (0 if kept else 1)
+
+
+def test_an_employer_whose_name_ends_in_another_employers_is_told_from_it_only_one_way():
+    """With the line breaks gone, West Lakeside's name is Lakeside's after a
+    line ending "Midwest", so only Lakeside's statements can be told."""
+    plans = {H457: ("LAKESIDE 457B", "Lakeside Schools"), W457: ("WEST LAKESIDE 457B", "West Lakeside Schools")}
+    listed = typed_plans(typed_page(plans, behaviors={}), plans)
+    ours, theirs = site.plan_digest(H457), site.plan_digest(W457)
+    west = "WEST LAKESIDE SCHOOLS\n" + TITLE_457
+    assert site.named_by_type("LAKESIDE SCHOOLS\n" + TITLE_457, listed, ours) == (True, "")
+    assert site.named_by_type(west, listed, ours) == \
+        (False, "no title of its type follows its employer's name")
+    for text in (west, "100 Midwest\nLakeside Schools\n" + TITLE_457):
+        assert site.named_by_type(text, listed, theirs) == \
+            (False, "another employer's name ends its employer's name")
+
+
+@pytest.mark.parametrize("plans, shown", [
+    # A plan whose name gives no type, at the same employer.
+    ({**TYPED, X457: ("HARBOR DCP", HARBOR)}, OPENS + (X457,)),
+    # A plan of the type that no page showed, so its employer is not known.
+    ({**TYPED, PVOL: ("PINE RIDGE VOLUNTARY 457B", PINE)}, OPENS),
+    # A header that names one employer for every plan.
+    ({H457: ("HARBOR 457B", HARBOR), W457: ("PINE RIDGE 457B", HARBOR)}, (H457, W457)),
+])
+def test_a_plan_that_may_be_of_the_type_at_the_employer_refuses_it(plans, shown):
+    listed = typed_plans(typed_page(plans), shown)
+    assert site.named_by_type(HARBOR + "\n" + TITLE_457, listed, site.plan_digest(H457)) == \
+        (False, "another plan of this login may be of its type at its employer")
+
+
+def test_a_plan_the_header_named_no_one_employer_for_is_not_taken_by_type():
+    page = typed_page()
+    listed = typed_plans(page, (H401, P401K))
+    text, ours = HARBOR + "\n" + TITLE_457, site.plan_digest(H457)
+    assert site.named_by_type(text, listed, ours) == (False, "the header did not name one employer for it")
+    page.in_context, page.employers[H457] = H457, ""
+    site._note_employer(page, next(p for p in listed if p["digest"] == ours))
+    assert site.named_by_type(text, listed, ours)[0] is False
+    for employer in (HARBOR, "Harbor City Schools District", HARBOR):
+        page.employers[H457] = employer
+        site._note_employer(page, next(p for p in listed if p["digest"] == ours))
+    assert site.named_by_type(text, listed, ours) == (False, "the header did not name one employer for it")
+    site._employers_seen[ours] = {site._bare(HARBOR)}
+    assert site.named_by_type(text, listed, ours) == (True, "")
+
+
+def test_the_employers_read_before_the_plan_list_are_let_go():
+    page = typed_page()
+    typed_plans(page, OPENS)
+    ours = {"digest": site.plan_digest(H457)}
+    assert site.employer_of(ours) == site._bare(HARBOR)
+    plans_of(page)
+    assert site.employer_of(ours) == ""
+
+
+@pytest.mark.parametrize("text, why", [
+    (HARBOR + "\n401(k) Plan Retirement Savings Statement", "a title in it is not of its type"),
+    (HARBOR + "\nRetirement Savings Statement", "a title in it is not of its type"),
+    (HARBOR + "\n" + TITLE_457 + "\nPage 2 Retirement Savings Statement", "a title in it is not of its type"),
+    (TITLE_457, "no title of its type follows its employer's name"),
+    (PINE + "\n" + TITLE_457, "no title of its type follows its employer's name"),
+    (HARBOR + " 2\n" + TITLE_457, "a title in it is not of its type"),
+    (HARBOR + "\n457b Deferred Compensation Plan", "it has no title of its type"),
+    (HARBOR + "\n" + TITLE_457 + "\nYour Harbor 401(a) balance", "it names another plan of the list"),
+    # The type of the plan beside it at the employer, or of one whose
+    # employer no page showed, as a combined statement under one title.
+    (HARBOR + "\n" + TITLE_457 + "\n401(a) Money Purchase Plan balance 200.00",
+     "it gives the type of another plan at its employer"),
+    (HARBOR + "\n" + TITLE_457 + "\nYour 401a Plan", "it gives the type of another plan at its employer"),
+    (HARBOR + "\n" + TITLE_457 + "\nVoluntary 403 (b) balance", "it gives the type of another plan at its employer"),
+])
+def test_a_statement_not_titled_for_its_type_after_its_employer_is_refused(text, why):
+    listed = typed_plans(typed_page(), OPENS)
+    assert site.named_by_type(text, listed, site.plan_digest(H457)) == (False, why)
+
+
+def test_a_type_only_another_employers_plan_has_or_a_number_is_not_another_plan_named():
+    listed = typed_plans(typed_page(), OPENS)
+    for line in ("Roll over a former employer's 401(k)", "Balance $401 Account 1,403 Bonds 2457 Bills",
+                 "Plan 401 Accounts"):
+        text = HARBOR + "\n" + TITLE_457 + "\n" + line
+        assert site.named_by_type(text, listed, site.plan_digest(H457)) == (True, ""), line
+
+
+def test_a_plan_whose_name_gives_no_type_is_never_named_by_type():
+    plans = {X457: ("HARBOR DCP", HARBOR), H401: ("HARBOR 401A", HARBOR)}
+    listed = typed_plans(typed_page(plans, behaviors={}), plans)
+    assert site.named_by_type(HARBOR + "\n" + TITLE_457, listed, site.plan_digest(X457)) == \
+        (False, "its name on the list gives no plan type")

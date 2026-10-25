@@ -30,6 +30,23 @@ All notable changes to PaperPull are recorded here. Versioning follows
   the other shapes were found while fixing them, each proven in a browser
   before the change. The statements a tester's recordings show for Wells
   Fargo and American Family are links, which this leaves as they read.
+- **NetBenefits saves a statement that names its plan only by type and
+  employer (#123).** On a sign-in with several plans, a statement must
+  name the plan it was made for, or it is set aside as the wrong document.
+  A 457(b)'s statements from mid 2022 on print a line naming the employer
+  and the title `457b Deferred Compensation Plan Retirement Savings
+  Statement`, never the plan's name on Choose a Plan, so all 18 were set
+  aside. Such a statement now counts as the plan's when the plan's name on
+  the list gives its type, the site's header named one employer on the
+  pages that showed the plan, every statement title in it is of that type
+  and one follows that employer's name, it names no other plan and gives
+  no type of a plan that may be at that employer, no other employer's name
+  ends that employer's name, and no other plan on the sign-in may be of
+  that type at that employer. A plan
+  whose name gives no type, or whose page never opened, counts as one that
+  may be. A second plan of the type at the employer, the employer's
+  combined statement and another employer's statement of the type are
+  still set aside.
 
 ## [0.58.0] - 2026-10-24
 

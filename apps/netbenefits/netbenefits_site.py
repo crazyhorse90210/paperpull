@@ -530,6 +530,10 @@ class PlanDidNotOpen(RuntimeError):
 # goes back to it and a statement is never made for another one.
 _plan_in_use: dict = {"plan": None}
 
+# The employers the site's header named on the pages that showed each plan
+# since the plan list was read, by the plan's digest (employer_of).
+_employers_seen: dict = {}
+
 _READ_CHOOSER_JS = r"""() => {
   if (location.protocol !== 'https:' || location.hostname !== 'workplaceservices.fidelity.com') return null;
   const text = (document.body && document.body.innerText) || '';
@@ -743,6 +747,7 @@ def read_plan_choices(page):
         return None
     # Whatever plan was open may not be once these pages have loaded.
     _plan_in_use["plan"] = None
+    _employers_seen.clear()
     links = _read_entries(page, CHOOSER_URL, _READ_CHOOSER_JS) or []
     exact = _plan_numbers(links)
     others = [o for o in links if not plan_ids(o.get("value") or "")]
@@ -882,6 +887,7 @@ def open_plan(page, plan: dict) -> str:
         if _shows_plan(page, plan):
             _plan_in_use["plan"] = plan
             _last_navigation["at"] = time.monotonic()
+            _note_employer(page, plan)
             return OPENED
     return DID_NOT_OPEN
 
@@ -984,6 +990,136 @@ def combined_label(plans, employer: str, text: str) -> str:
     names = sorted(re.sub(r"\s+Plan$", "", p["label"]) for p in plans)
     joined = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
     return joined + " Plans"
+
+
+# -- a statement that names its plan by its type and employer (#123) ----------------
+
+def _bare(text: str) -> str:
+    """Upper case letters and digits alone, so "457(b)" is "457B" and a
+    name matches however a PDF's text broke, spaced or glued its lines."""
+    return re.sub(r"[^A-Z0-9]", "", (text or "").upper())
+
+
+def _note_employer(page, plan: dict) -> None:
+    """The employer the header names now, written down for `plan`, which
+    the page shows. A header that names none says nothing either way."""
+    name = _bare(employer_name(page))
+    if name:
+        _employers_seen.setdefault(plan["digest"], set()).add(name)
+
+
+def employer_of(plan: dict) -> str:
+    """The employer, as _bare writes it, that the header named on every
+    page that showed `plan` since the plan list was read, or '' when it
+    named none or more than one."""
+    seen = _employers_seen.get(plan.get("digest")) or set()
+    return next(iter(seen)) if len(seen) == 1 else ""
+
+
+# A plan's type as the tax code writes it, 401(k), 403(b), 457(b) and the
+# like, with its brackets or without, in a plan's name on the list.
+_TYPE_IN_NAME_RE = re.compile(r"(?<![A-Za-z0-9])(401|403|457)\s*\(?\s*([A-Za-z])\s*\)?(?![A-Za-z0-9])")
+
+
+def plan_type(plan: dict) -> str:
+    """The type a plan's name on the list gives it, as "457B" for "ABC
+    457(B) PLAN" or "EMPLOYER 457B", or '' for a name that gives none or
+    more than one."""
+    name = re.sub(r"\(\s*\d+\s*\)", "", plan.get("heading") or plan.get("label") or "")
+    found = {m.group(1) + m.group(2).upper() for m in _TYPE_IN_NAME_RE.finditer(name)}
+    return found.pop() if len(found) == 1 else ""
+
+
+# A type anywhere in a statement's text with each run of spaces made one,
+# in brackets or as its own word, and never part of an amount or a number.
+_TYPE_IN_TEXT_RE = re.compile(r"(?<![0-9$.,])(401|403|457) ?\( ?([A-Z]) ?\)"
+                              r"|(?<![0-9$.,A-Z])(401|403|457) ?([A-Z])(?![A-Z0-9])")
+
+
+def _types_in(text: str) -> set:
+    spaced = re.sub(r"\s+", " ", text or "").upper()
+    return {(m.group(1) or m.group(3)) + (m.group(2) or m.group(4))
+            for m in _TYPE_IN_TEXT_RE.finditer(spaced)}
+
+
+# A statement's title, the plan and then "Retirement Savings Statement".
+# One plan's prints "Some Corp. Retirement Savings Plan Retirement Savings
+# Statement", and #123's 457(b) a line naming its employer and then "457b
+# Deferred Compensation Plan Retirement Savings Statement".
+_TITLE = "RETIREMENTSAVINGSSTATEMENT"
+# A type and then letters alone, up to a title. The type is the last one
+# before it, and a digit before the type makes it part of a number.
+_TYPE_BEFORE_TITLE_RE = re.compile(r"(?<![0-9])(401|403|457)([A-Z])[A-Z]{0,60}$")
+
+
+def named_by_type(text: str, plans, chosen: str) -> tuple:
+    """(True, '') when a statement whose text gives no plan's name from the
+    list names the plan `chosen` (its digest) by its type and employer,
+    else (False, why not), in fixed words.
+
+    Some plans' statements print no name the list gives, only a line naming
+    the employer and then a title of the plan's type (#123). Such a
+    statement is this plan's only when all of these hold. The plan's name
+    on the list gives one type. The site's header named one employer on the
+    pages that showed the plan. The text names no other plan of the list.
+    Every other plan on the login is of another type, or is at another
+    employer by the header on the pages that showed it, so a plan whose
+    name gives no type, or which no page showed, counts as one that may be
+    of this type at this employer. The text gives no type of a plan that
+    may be at this employer, as a combined statement would. No other
+    employer of the login has a name this one's ends with, since with the
+    line breaks gone "West Lakeside" cannot be told from "Lakeside" after
+    a line ending "Midwest". Every title in the text is of this type, and
+    one has this employer's name right before it, and not a longer
+    employer's name of the login that ends the same way. So a second plan
+    of the type at the employer, the employer's combined statement and
+    another employer's statement of the type are all refused. Compared
+    with every space and mark taken out (_bare)."""
+    by_digest = {p["digest"]: p for p in plans}
+    plan = by_digest.get(chosen)
+    if plan is None:
+        return False, "the plan is not on the list"
+    kind = plan_type(plan)
+    if not kind:
+        return False, "its name on the list gives no plan type"
+    employer = employer_of(plan)
+    if not employer:
+        return False, "the header did not name one employer for it"
+    hay = _bare(text)
+    others = [p for digest, p in by_digest.items() if digest != chosen]
+    if any(_bare(_name_key(p)) and _bare(_name_key(p)) in hay for p in others):
+        return False, "it names another plan of the list"
+    for other in others:
+        theirs = plan_type(other)
+        if theirs and theirs != kind:
+            continue
+        at = employer_of(other)
+        if not at or at == employer:
+            return False, "another plan of this login may be of its type at its employer"
+    near = {plan_type(p) for p in others if employer_of(p) in ("", employer)}
+    if near & _types_in(text):
+        return False, "it gives the type of another plan at its employer"
+    employers = {employer_of(p) for p in plans} - {""}
+    if any(e != employer and employer.endswith(e) for e in employers):
+        return False, "another employer's name ends its employer's name"
+    after_employer = False
+    titles = [m.start() for m in re.finditer(_TITLE, hay)]
+    for start in titles:
+        # The window is longer than any type and its words, so the digit
+        # check before the type always has the real text to look at.
+        window = max(0, start - 80)
+        m = _TYPE_BEFORE_TITLE_RE.search(hay, window, start)
+        if not m or m.group(1) + m.group(2) != kind:
+            return False, "a title in it is not of its type"
+        lead = hay[:m.start()]
+        ends = [e for e in employers if lead.endswith(e)]
+        if ends and max(ends, key=len) == employer:
+            after_employer = True
+    if not titles:
+        return False, "it has no title of its type"
+    if not after_employer:
+        return False, "no title of its type follows its employer's name"
+    return True, ""
 
 
 def collect_documents(page, keep=None, config: Optional[dict] = None) -> List[dict]:

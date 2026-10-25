@@ -84,7 +84,25 @@ Discover lists each plan's own.
 plans of one employer, and asking for it from any of those plans gives the
 same statement. After each statement is saved, the app reads its text. It
 must name the plan it was made for, or it is set aside for review as the
-wrong document. When it names other plans of the list too, it is saved
+wrong document. Some plans' statements print a line naming the employer and
+then a title of the plan's type, as in `457b Deferred Compensation Plan
+Retirement Savings Statement`, and never the name Choose a Plan gives the
+plan. Such a statement counts as naming its plan only when all of these
+hold. The plan's name on the list gives one type, such as 457(b). The
+site's header named one employer on the pages that showed the plan during
+the run. Every Retirement Savings Statement title in the text is of that
+type, and one comes right after that employer's name. The text names no
+other plan of the list, and gives no type of a plan that may be at the same
+employer, as a combined statement would. No other employer on the sign-in
+has a name this employer's name ends with, since once a statement's line
+breaks are gone the two cannot be told apart. And every other plan on the
+sign-in is of another type, or the header named another employer on its
+own page. A plan whose name gives no type, or whose page never opened, may
+be of the same type at the same employer, and then the statement is set
+aside as before. So a
+second plan of the same type at the same employer, the employer's combined
+statement and another employer's statement of that type are all still set
+aside. When a statement names other plans of the list too, it is saved
 under the employer's name when the site's header gives one and the
 statement carries it too (`... Quarterly Statement - Lakeside College of
 Arts Plans.pdf`), or else under the plans' names (`... Quarterly Statement
