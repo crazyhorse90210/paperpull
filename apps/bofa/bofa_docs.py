@@ -135,6 +135,17 @@ class Document:
         return cls(**d)
 
 
+def listed_key(d: dict) -> str:
+    """The key of the statement a listed row names, before it is
+    numbered, from the row as _record_document reads it. A history moved
+    to another computer carries no discovery.json, and told_apart finds
+    each saved number by this key then."""
+    return Document(title=re.sub(r"\s+", " ", (d.get("title") or "")).strip() or "Statement",
+                    category=d.get("category") or doc_types.STATEMENT,
+                    date=(d.get("date") or "").strip(),
+                    account=re.sub(r"\s+", " ", (d.get("account") or "")).strip()).key
+
+
 class App:
     _journal = None
     _requests = None
@@ -484,7 +495,8 @@ class App:
         # whole key, the category with it, as every app's census asks.
         alike = ("category", "title", "date", "account")
         for d, (occ, sure) in zip(raw, _told_apart(raw, self.discovery.data, fields=alike,
-                                                   saved=self.progress.data)):
+                                                   saved=self.progress.data,
+                                                   key_of=listed_key)):
             d["occurrence"] = occ
             n_new += self._record_document(d, sure)
         self.discovery.save()

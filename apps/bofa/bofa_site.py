@@ -580,6 +580,16 @@ def _opens_a_list(el) -> bool:
         return False
 
 
+def _submits_a_form(el) -> bool:
+    """A button inside a form submits it when pressed, unless it is typed
+    a plain button, and a press here only ever opens a list. One that
+    cannot be read is taken for one that submits."""
+    try:
+        return bool(el.evaluate("e => !!e.form && (e.type || '').toLowerCase() !== 'button'"))
+    except Exception:
+        return True
+
+
 def _any_refuses(labels) -> bool:
     """A label any of the blocklists refuses, which is_safe_control asks
     of a control's name."""
@@ -621,7 +631,8 @@ def open_statements(page) -> str:
         return "not found"
     # Its words, each label it carries, and the list it says it opens.
     if (el is None or not _opens_a_list(el) or not labels
-            or not any(is_statements_heading(x) for x in labels) or _any_refuses(labels)):
+            or not any(is_statements_heading(x) for x in labels) or _any_refuses(labels)
+            or _submits_a_form(el)):
         return "refused"
     # Read once more right before the press. A heading the page has opened
     # meanwhile would be shut by it, and a tab gone from the page is not

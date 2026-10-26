@@ -60,9 +60,10 @@ The `.gitignore` already blocks all of the following. Do not override it.
     TreasuryDirect give each control a guard of its own built the same way.
     Best Buy presses only its year menu and a year in it. Bank of America
     presses only the Statements heading of its statements page, a button
-    whose whole name is Statements and which says it is shut, once, when the
-    page shows no Download PDF link, and asks for every list and PDF from
-    inside the page. M&T presses only
+    whose whole name is Statements and which says it is shut, when the page
+    shows no Download PDF link, and again after a later reload shuts it,
+    never one a press would submit a form with, and asks for every list and
+    PDF from inside the page. M&T presses only
     the year headings of its statements list, and since a year is no
     document word, `is_safe_control()` would refuse them. So the heading
     has a guard of its own, the blocklists plus its whole words, a year

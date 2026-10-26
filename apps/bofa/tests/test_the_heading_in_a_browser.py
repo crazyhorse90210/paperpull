@@ -87,12 +87,19 @@ def browser():
         b.close()
 
 
-def statements_page(browser, extra=""):
+def statements_page(browser, extra="", in_a_form=False):
     """A tab on the made-up statements page, with every address served
-    here, and the list and the PDFs each one asked for."""
+    here, and the list and the PDFs each one asked for. in_a_form puts
+    the Statements heading, with no type, inside a form that posts."""
     context = browser.new_context(viewport={"width": 1000, "height": 700})
     seen = {"lists": [], "pdfs": []}
     html = PAGE % {"list": LIST_PATH, "link": sb.LINK_BASE, "extra": extra}
+    if in_a_form:
+        html = html.replace('<div id="cat-stmt"><button type="button"',
+                            '<div id="cat-stmt"><form method="post" action="/paperless"><button', 1)
+        html = html.replace('</button><div id="panel-stmt" hidden></div></div>',
+                            '</button></form><div id="panel-stmt" hidden></div></div>', 1)
+        assert '<form method="post"' in html and '</button></form>' in html
 
     def serve(route):
         req = route.request
@@ -153,6 +160,20 @@ def test_the_shut_heading_is_opened_once_and_the_links_form_learned(browser):
                                         document_id="DOC000000000101", year="2026")
         assert data.startswith(b"%PDF") and day == "2026-01-15"
         assert seen["pdfs"] == [sb.LINK_BASE + "DOC000000000101"]
+    finally:
+        context.close()
+
+
+def test_a_heading_that_would_submit_a_form_is_never_pressed(browser):
+    context, page, seen = statements_page(browser, in_a_form=True)
+    try:
+        call = site.learn(page)
+        assert call.facts["statements_heading"] == "refused"
+        assert call.template is None
+        # Not pressed, so the page asked nothing more and posted nothing.
+        assert [b.get("lang") for b in page.evaluate("window.asked")] == [None]
+        assert page.get_attribute("[aria-controls=panel-stmt]", "aria-expanded") == "false"
+        assert page.url.startswith(sb.PAGE_URL.split("?")[0])
     finally:
         context.close()
 

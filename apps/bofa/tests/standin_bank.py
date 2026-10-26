@@ -122,8 +122,15 @@ class Locator:
 class Heading:
     """A category's heading button, as an element handle."""
 
-    def __init__(self, page, label="Statements", controls="panel-stmt", title=""):
+    def __init__(self, page, label="Statements", controls="panel-stmt", title="",
+                 form=False):
         self.page, self.label, self.controls, self.title = page, label, controls, title
+        self.form = form  # inside a form, as a button that would submit it
+
+    def evaluate(self, script, *args):
+        if "e.form" not in script:
+            raise AttributeError("the stand-in heading answers only whether it submits a form")
+        return bool(self.form)
 
     def inner_text(self, timeout=None):
         return self.label

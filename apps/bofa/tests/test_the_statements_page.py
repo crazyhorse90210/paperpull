@@ -371,12 +371,14 @@ def test_an_open_heading_is_never_pressed():
     (dict(heading="shut", controls=""), "refused"),
     (dict(heading="shut", title="Pay your bill"), "refused"),
     (dict(heading="shut", label="Statements & Documents"), "refused"),
+    (dict(heading="shut", form=True), "refused"),
 ])
 def test_a_heading_that_is_not_the_one_is_never_pressed(how, state):
-    """No heading, two of the name, one that names no list it opens, or one
-    with a label the guard refuses. Nothing is pressed and nothing guessed."""
+    """No heading, two of the name, one that names no list it opens, one
+    with a label the guard refuses, or one a press would submit a form
+    with. Nothing is pressed and nothing guessed."""
     page = sb.Bank(heading=how["heading"])
-    for name in ("controls", "title", "label"):
+    for name in ("controls", "title", "label", "form"):
         if name in how:
             setattr(page.heading_el, name, how[name])
     call = site.learn(page)
