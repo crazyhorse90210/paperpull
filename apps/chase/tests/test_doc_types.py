@@ -333,7 +333,7 @@ def test_a_scoped_run_never_selects_a_year_it_will_throw_away(monkeypatch):
     monkeypatch.setattr(site, "ensure_statements", lambda page: True)
     monkeypatch.setattr(site, "year_options", lambda page: ["2026", "2025", "2024", "2019"])
     monkeypatch.setattr(site, "card_accordions", lambda page: [(None, "Sapphire ...1234")])
-    monkeypatch.setattr(site, "select_year", lambda page, y: (selected.append(y), True)[1])
+    monkeypatch.setattr(site, "select_year", lambda page, y, *_a: (selected.append(y), True)[1])
     monkeypatch.setattr(site, "collapse_all_cards", lambda page: None)
     monkeypatch.setattr(site, "read_card_rows", lambda page, label: [])
     site.chase_collect_via_api(page=None, keep=lambda y: y == "2025")

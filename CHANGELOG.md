@@ -48,6 +48,18 @@ All notable changes to PaperPull are recorded here. Versioning follows
   the other shapes were found while fixing them, each proven in a browser
   before the change. The statements a tester's recordings show for Wells
   Fargo and American Family are links, which this leaves as they read.
+- **Chase never calls its statement list whole with a year or a card left
+  out.** The list is read year by year through the "View" picker and card
+  by card through each card's own accordion. A year the picker listed and
+  would not take, and a card whose accordion would not open, were passed
+  over, and the list was still noted as read whole, so Resume could call a
+  run finished with a year or a card never read. The page's text reading,
+  used when that walk finds nothing, did the same with an account or a
+  year its dropdowns offered. Now the run keeps what it read and takes it,
+  writes a failure file and stops at its end rather than finish, so the
+  next run reads the list again. A year the open picker does not list, an
+  option that is turned off and one the guard refuses are never chosen,
+  and are left as they were.
 
 ## [0.58.0] - 2026-10-24
 
