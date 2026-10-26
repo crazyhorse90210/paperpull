@@ -794,16 +794,61 @@ class App:
         A warehouse receipt is checked on its date and total, because
         Costco gives one no number and the key this app invents for it
         appears on no receipt ever printed. See site.identity_for.
+
+        It is checked against the other purchases of its day, or with none
+        against the purchases either side on other days, and in the first
+        case again once saved against those either side (_rivals). One the
+        second check refuses is treated as one the render refused.
         """
-        return delivery.render(
+        expect = site.identity_for(purchase)
+        strict = bool(self.config.get("refuse_wrong_documents", False))
+        same_day, near = self._rivals()
+        got = delivery.render(
             target_page,
             lambda staged: self._render(target_page, staged),
             out_path,
-            expect=site.identity_for(purchase),
-            rivals=identity.rivals_for(getattr(self, '_rows', ()),
-                                       getattr(self, '_row_index', -1)),
+            expect=expect,
+            rivals=same_day or near,
             journal=self.journal,
-            strict=bool(self.config.get("refuse_wrong_documents", False)))
+            strict=strict)
+        if got.ok and same_day and near:
+            # So its day is checked even when the render told it apart from
+            # the others of its day by its total alone. With nothing either
+            # side no other purchase's day could be found in it, and its own
+            # day not found destroys nothing, as it never did beside another
+            # purchase of its day.
+            again = identity.distinguish(out_path, expect, near)
+            self.journal.op("verify", "check the receipt again", outcome=again.outcome,
+                            checked=len(again.checked), matched=len(again.matched))
+            if again.outcome == identity.REFUSED and strict:
+                try:
+                    out_path.unlink()
+                except OSError as e:
+                    # Kept where it was saved, as it is with refusing off,
+                    # rather than said to be destroyed while it is there.
+                    log.info("could not remove the refused receipt: %s", type(e).__name__)
+                else:
+                    return delivery.Delivery(delivery.WRONG, got.mechanism, again,
+                                             got.armed, got.bytes_len)
+        return got
+
+    def _rivals(self) -> tuple:
+        """The purchases this one could be taken for, in two groups, since
+        each differs from it by another fact. The others of its day differ
+        by their total, and the rows either side on other days
+        (identity.rivals_for) differ by their day and usually their total.
+        One of those with this one's total, a gas fill paid ahead for the
+        same amount, would share it, and asked together, the day the first
+        share and the total the second shares would both stop counting, and
+        nothing would be left to tell them apart by."""
+        rows = list(getattr(self, "_rows", ()) or ())
+        i = getattr(self, "_row_index", -1)
+        if not 0 <= i < len(rows):
+            return (), ()
+        day = rows[i].date
+        same_day = [r for n, r in enumerate(rows) if n != i and day and r.date == day]
+        near = [r for r in identity.rivals_for(rows, i) if not day or r.date != day]
+        return same_day, near
 
     def _refused(self, purchase: Purchase, got) -> bool:
         """A receipt was printed, read back, and is not this purchase.
