@@ -96,6 +96,20 @@ All notable changes to PaperPull are recorded here. Versioning follows
   so neither shape touches them. A form whose link names only a masked
   number and its date, and a link naming only its date beside a masked
   number, are now left for a person even where the row names the form.
+- **State Farm counts a button drawn as an input when it ties a document
+  to its row.** State Farm finds a row's View Documents by its role, and an
+  input of type button, submit, image or reset has a button's role, so it
+  finds and presses one drawn that way. Its two checks around the press
+  counted only links and buttons, though. Under a date heading, when a
+  newer notice was added and opened in the pressed row's place, the other
+  row's View Documents drawn as such an input did not say the notice might
+  be that row's, and the newer notice was saved under the pressed row's
+  name. In a category drawn as one row, a mailed entry's control drawn as
+  an input did not stop the walk from the opened entry either, which took
+  the mailed entry's date and had another day's document saved under it.
+  Both checks count those inputs now, as they count buttons, and such a
+  page is refused as the same page drawn with buttons is. A box to tick or
+  a text field is still not counted.
 
 ## [0.58.0] - 2026-10-24
 

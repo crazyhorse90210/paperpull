@@ -1725,6 +1725,20 @@ class RawDoc:
     ident: str = ""
 
 
+# What the walk and the tie below count as a control. A control is found by
+# its role (_bill_controls), and Playwright gives an <input> of type button,
+# submit, image or reset a button's role, so a View Documents drawn as one is
+# found and pressed like a button. Links and buttons alone were counted here.
+# Another row's View Documents drawn as such an input, in the block under a
+# date heading that a pressed row reads its date from, did not say the notice
+# showing might be that row's, and the notice a row opened in the pressed
+# row's place showed was saved under the pressed row's name. Another entry's
+# control drawn so did not stop the walk past a day ahead, and the walk took
+# that entry's date. A box to tick and a text field are not controls here,
+# since the role a control is found by is a link's or a button's.
+_CONTROLS_CSS = ("a, button, [role=button], [role=link], "
+                 "input[type=button], input[type=submit], input[type=image], input[type=reset]")
+
 # The date a bill control belongs to. The control's own name first, then
 # the nearest enclosing row or card whose text carries a date, up to six
 # levels up. _ROW_BOX_JS finds that container, the control itself when its
@@ -1781,7 +1795,7 @@ _ROW_BOX_JS = r"""el => {
   const opener = /^\s*view\s+documents?\s*\d*\s*$/i.test(words(el));
   const near = el.closest('[role=row], tr, li');
   const own = near && near.matches('[role=row]') ? near : null;
-  const controls = n => [...n.querySelectorAll('a, button, [role=button], [role=link]')];
+  const controls = n => [...n.querySelectorAll('""" + _CONTROLS_CSS + r"""')];
   let node = el, depth = 0, aheadOnly = null;
   const docShaped = c => /^[A-Za-z][A-Za-z0-9&\/'(). ]{1,60}?\s+-\s+\S/.test(words(c))
     && !/^\s*view\s+documents?\s*\d*\s*$/i.test(words(c));
@@ -2246,7 +2260,7 @@ _TIE_JS = ("(row, [doc, dated, openers]) => { const box = (" + _ROW_BOX_JS + ")(
            "!!box && !!box.parentElement && box.parentElement.contains(doc), "
            "!!box && !!box.nextElementSibling && box.nextElementSibling.contains(doc), "
            "!!doc.closest('dialog, [role=dialog], [aria-modal=true]'), "
-           "box ? [...box.querySelectorAll('a, button, [role=button], [role=link]')].filter(c => "
+           "box ? [...box.querySelectorAll('" + _CONTROLS_CSS + "')].filter(c => "
            "c !== row && c !== doc && c.getClientRects().length > 0 && (c.hasAttribute('aria-expanded') || "
            "/^\\s*(view|hide|show|close)\\s+documents?\\s*\\d*\\s*$/i.test("
            "((c.getAttribute('aria-label') || c.innerText || '') + '').replace(/\\s+/g, ' ')))).length : 0, "
