@@ -124,6 +124,19 @@ All notable changes to PaperPull are recorded here. Versioning follows
   history of the panel that was open was read under the first account's
   key. Both count those inputs now, and such a page reads as the same page
   drawn with links.
+- **American Family tells one bill's statements from another's when a
+  Bill details is drawn as an input.** It finds each bill's Bill details by
+  its role, and an input of type button, submit, image or reset has a
+  button's role. Reading a bill's account from its card, and checking that
+  what a press brought sits around no other bill, it counted only links
+  and buttons as another bill's Bill details. So a bill whose card shows no
+  number took the account number of the card beside it, and its statements
+  were saved under that other bill's account. Statements a press drew
+  around another bill's Bill details drawn as an input were read as the
+  pressed bill's too, and were saved as its own, or sent both bills' copies
+  to Manual Review. Both readings count those inputs now, as they count
+  buttons. A box to tick or a text field named Bill details is still not
+  one.
 
 ## [0.58.0] - 2026-10-24
 

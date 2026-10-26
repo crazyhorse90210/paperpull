@@ -259,6 +259,16 @@ function details(bill) {
   } else if (way === 'new-tab') {
     window.open('about:blank', '_blank');
     place(bill);
+  } else if (way === 'beside-N') {
+    // N's statements drawn among the bills' cards, as this bill's press.
+    document.querySelector('.bills').insertAdjacentHTML('beforeend', rows('N'));
+  } else if (way === 'route-box' || way === 'route-text') {
+    // A box to tick or a text field named Bill details among its own rows.
+    own();
+    view('Bill details', bill, bill);
+    document.querySelector('#statements-' + bill + ' .rows').insertAdjacentHTML('afterbegin',
+      way === 'route-box' ? "<input type='checkbox' aria-label='Bill details'>"
+                          : "<input type='text' aria-label='Bill details'>");
   } else if (way === 'beside') {
     document.querySelector('.bills').insertAdjacentHTML('beforeend', rows(bill));
   } else if (way === 'nothing') {
@@ -1163,3 +1173,128 @@ def test_a_bills_own_bytes_again_after_a_move_are_its_own(billing_site, tmp_path
     assert saved(new) == expected("A")
     assert {k: v for k, v in states(app).items()} == {
         (part_of("A"), iso(d)): (State.COMPLETED.value, True) for d in DATES["A"]}
+
+
+# -- a Bill details drawn as an input ---------------------------------------------------
+#
+# The core finds a Bill details by its role (_details_controls), and an
+# <input> of type button, submit, image or reset has a button's role. The
+# card a bill's number is read from and what a press brought were bounded by
+# another bill's Bill details counted as a link or a button alone, so one
+# drawn as such an input bounded nothing. A bill whose card shows no number
+# took the account number of the card beside it, and statements a press drew
+# around another bill's Bill details were read as the pressed bill's. Each
+# page here is read as the same page drawn with buttons, and a box to tick or
+# a text field named Bill details, which no role a Bill details is found by
+# takes, is still no Bill details.
+
+INPUT_KINDS = ("button", "submit", "image", "reset")
+# The page's own button first, then an input of each kind.
+DRAWN_AS = (None,) + INPUT_KINDS
+DRAWN_IDS = ["a button"] + ["an input of type %s" % kind for kind in INPUT_KINDS]
+
+
+def details_drawn(bill: str, kind) -> str:
+    """A bill's Bill details drawn as the page's button when `kind` is None,
+    or as an input of `kind` named Bill details for a screen reader."""
+    if kind is None:
+        return details_button(bill)
+    size = " src='data:,' width='24' height='24'" if kind == "image" else ""
+    return ("<input type='%s' data-cy='billDetails' id='details-%s' aria-label='Bill details'%s "
+            "onclick=\"event.preventDefault(); details('%s')\">" % (kind, bill, size, bill))
+
+
+def told_by_policy(bill: str) -> str:
+    """The account part a bill is told by when its card labels its policy
+    nearest its Bill details."""
+    return "..." + POLICY[bill].replace("-", "")[-4:]
+
+
+@pytest.mark.parametrize("kind", DRAWN_AS, ids=DRAWN_IDS)
+def test_a_card_with_no_number_never_takes_the_number_of_the_card_beside_it(billing_site, tmp_path, kind):
+    """N's card shows no number. B's Bill details sits in a box of its own
+    beside B's policy, so B is told by its policy, and B's billing account
+    is printed outside that box. Drawn as inputs, B's Bill details did not
+    end the walk from N's, so N took B's billing account, was opened, and
+    its statement was saved under B's account. N is left alone now, as with
+    buttons, and B is saved under its policy."""
+    box = "<div class='inner'><p><span>Home policy</span> <span>%s</span></p>%s</div>" % (
+        POLICY["B"], details_drawn("B", kind))
+    s = billing_site(billing_page({"N": "route", "B": "route"},
+                                  controls={"N": details_drawn("N", kind), "B": box}))
+    app = app_on(s.page, tmp_path)
+    run(app)
+    assert recorded(app) == {(told_by_policy("B"), iso(d)) for d in DATES["B"]}
+    assert saved(tmp_path) == {"%s American Family Billing Statement %s.pdf" % (iso(d), told_by_policy("B")):
+                               pdf("B", d) for d in DATES["B"]}
+    assert failure_reasons(tmp_path) == [site.NO_ACCOUNT]
+    assert "bill-details-N" not in only_details_and_statements(s)
+    assert tabs_left(s.page) == []
+
+
+@pytest.mark.parametrize("kind", DRAWN_AS, ids=DRAWN_IDS)
+def test_another_bills_statements_drawn_beside_its_bill_details_are_never_this_bills(billing_site, tmp_path,
+                                                                                     monkeypatch, kind):
+    """B's press draws N's two statements among the bills' cards, around N's
+    Bill details, and N's own press shows nothing. N's card shows only its
+    policy and B's its billing account, so the view names no account of
+    B's kind but B's own. Drawn as inputs, N's Bill details was no other
+    bill's, and N's statements were saved as B's. They are refused now as
+    beside another bill, as with buttons, and nothing is saved."""
+    monkeypatch.setitem(DATES, "N", ["09/18/2026", "08/18/2026"])
+    s = billing_site(billing_page({"N": "nothing", "B": "beside-N"}, policies=("N",),
+                                  controls={b: details_drawn(b, kind) for b in ("N", "B")}))
+    app = app_on(s.page, tmp_path)
+    run(app)
+    assert recorded(app) == set()
+    assert saved(tmp_path) == {}
+    assert not statements_of(only_details_and_statements(s), "N")
+    assert tabs_left(s.page) == []
+
+
+@pytest.mark.parametrize("kind", DRAWN_AS, ids=DRAWN_IDS)
+def test_a_bill_whose_statements_another_press_drew_keeps_them_its_own(billing_site, tmp_path, monkeypatch,
+                                                                         kind):
+    """The same page with N's own press showing its list. Drawn as inputs, B
+    read N's statements as its own too, and the same bytes for two bills
+    sent both bills' copies to Manual Review. B is refused as beside another
+    bill now, and N's statements are saved as N's."""
+    monkeypatch.setitem(DATES, "N", ["09/18/2026", "08/18/2026"])
+    s = billing_site(billing_page({"N": "route", "B": "beside-N"}, policies=("N",),
+                                  controls={b: details_drawn(b, kind) for b in ("N", "B")}))
+    app = app_on(s.page, tmp_path)
+    run(app)
+    assert recorded(app) == found("N")
+    assert saved(tmp_path) == expected("N")
+    assert failure_reasons(tmp_path) == [site.BESIDE_ANOTHER]
+    assert tabs_left(s.page) == []
+
+
+@pytest.mark.parametrize("field", ["<input type='checkbox' aria-label='Bill details'>",
+                                   "<input type='text' aria-label='Bill details'>"],
+                         ids=["a box to tick", "a text field"])
+def test_a_field_named_bill_details_beside_one_ends_no_card(billing_site, tmp_path, field):
+    """A's Bill details sits beside a box to tick or a text field named Bill
+    details. The core finds no Bill details in it, so it ends no walk, and A
+    is told by the number its card shows and saved, as is B."""
+    control = "<div class='beside'>%s %s</div>" % (field, details_button("A"))
+    s = billing_site(billing_page({"A": "route", "B": "route"}, controls={"A": control}))
+    app = app_on(s.page, tmp_path)
+    run(app)
+    assert saved(tmp_path) == expected("A", "B")
+    assert failure_reasons(tmp_path) == []
+    assert tabs_left(s.page) == []
+
+
+@pytest.mark.parametrize("way", ["route-box", "route-text"], ids=["a box to tick", "a text field"])
+def test_a_field_named_bill_details_among_a_bills_statements_is_no_other_bill(billing_site, tmp_path, way):
+    """A's press shows its statements with a box to tick or a text field
+    named Bill details among them. The core finds no Bill details in it, so
+    the statements do not sit beside another bill's, and A's are saved, as
+    are B's."""
+    s = billing_site(billing_page({"A": way, "B": "route"}))
+    app = app_on(s.page, tmp_path)
+    run(app)
+    assert saved(tmp_path) == expected("A", "B")
+    assert failure_reasons(tmp_path) == []
+    assert tabs_left(s.page) == []

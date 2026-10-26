@@ -1548,15 +1548,23 @@ class Bill:
 # first and then each one around it, out to the widest that holds no other
 # Bill details control, no heading of the page and no more than 600
 # characters, up to eight levels up. Lines stay apart, since a label and
-# its number can each sit on a line of their own.
+# its number can each sit on a line of their own. A Bill details control is
+# a link or a button, or an input of type button, submit, image or reset,
+# which the core finds by its role as it finds a button (_details_controls).
+# Counted as links and buttons alone, another bill's Bill details drawn as
+# an input did not end the walk, so a bill whose card shows no number took
+# the account number of the card beside it, and its statements were saved
+# under that other bill's account.
 _CARD_LEVELS_JS = r"""(el, pattern) => {
   const details = new RegExp(pattern, 'i');
+  const CONTROLS = 'a, button, [role=button], [role=link], '
+    + 'input[type=button], input[type=submit], input[type=image], input[type=reset]';
   const wordsOf = (c) => (c.getAttribute('aria-label') || c.innerText || '').replace(/\s+/g, ' ').trim();
   const linesOf = (n) => (n.innerText || '').replace(/[^\S\n]+/g, ' ').replace(/ *\n[\n ]*/g, '\n').trim();
   const levels = [linesOf(el)];
   for (let node = el.parentElement, depth = 0; node && depth < 8; node = node.parentElement, depth++) {
     if (node === document.body || node.matches('main, [role=main]') || node.querySelector('h1')) break;
-    const another = Array.from(node.querySelectorAll('a, button, [role=button], [role=link]')).some(
+    const another = Array.from(node.querySelectorAll(CONTROLS)).some(
       (c) => c !== el && !el.contains(c) && !c.contains(el) && details.test(wordsOf(c)));
     if (another || (node.innerText || '').length > 600) break;
     levels.push(linesOf(node));
@@ -1569,15 +1577,21 @@ _CARD_LEVELS_JS = r"""(el, pattern) => {
 # out to the widest element below the page's main part that holds no other
 # bill's Bill details, as its lines, or beside true when the statements
 # themselves sit around another bill's Bill details. The control pressed is
-# kept in the page as it is pressed (_press_details).
+# kept in the page as it is pressed (_press_details). Another bill's Bill
+# details drawn as an input of type button, submit, image or reset is one
+# too, as in _CARD_LEVELS_JS. Counted as links and buttons alone,
+# statements a press drew around one were read as the pressed bill's, and
+# another bill's statements were saved as its own.
 _VIEW_OF_JS = r"""(els, pattern) => {
   const isNew = (e) => !(window.__paperpullShownBefore && window.__paperpullShownBefore.has(e));
   const shown = els.filter(isNew);
   if (!shown.length) return null;
   const details = new RegExp(pattern, 'i');
   const pressed = window.__paperpullPressed;
+  const CONTROLS = 'a, button, [role=button], [role=link], '
+    + 'input[type=button], input[type=submit], input[type=image], input[type=reset]';
   const wordsOf = (c) => (c.getAttribute('aria-label') || c.innerText || '').replace(/\s+/g, ' ').trim();
-  const another = (n) => Array.from(n.querySelectorAll('a, button, [role=button], [role=link]')).some(
+  const another = (n) => Array.from(n.querySelectorAll(CONTROLS)).some(
     (c) => !(pressed && (c === pressed || c.contains(pressed) || pressed.contains(c))) && details.test(wordsOf(c)));
   let common = shown[0];
   while (common && !shown.every((e) => common.contains(e))) common = common.parentElement;
