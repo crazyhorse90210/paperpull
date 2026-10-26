@@ -48,6 +48,19 @@ All notable changes to PaperPull are recorded here. Versioning follows
   the other shapes were found while fixing them, each proven in a browser
   before the change. The statements a tester's recordings show for Wells
   Fargo and American Family are links, which this leaves as they read.
+- **U.S. Bank never calls its statement list whole with an account or a
+  year left out.** The list is read account by account and year by year
+  through the page's own pickers. An account whose choice did not take, a
+  year the picker would not take or still showed the year before for, and
+  a picker that would not answer or listed none of its accounts or years
+  were each passed over, and the list was still noted as read whole. So
+  Resume could call a run finished with an account or a year never read.
+  Now the run keeps what it read and takes it, says which picker it could
+  not read through, writes a failure file and stops at its end rather than
+  finish, so the next run reads the list again. A list that would not be
+  counted, and rows the page's text reading could not read, stop the list
+  as rows that would not answer always did, and that reading never chooses
+  an option that is turned off or that the guard refuses.
 
 ## [0.58.0] - 2026-10-24
 

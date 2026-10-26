@@ -444,7 +444,10 @@ class Read(list):
     read from it. unread, the rows with a Download for a statement whose
     label did not read to a date or clear the guard. heads, each statements
     section's account from its heading. unchosen, the accounts the picker
-    offered that could not be chosen."""
+    offered that could not be chosen. passed_over, each picker a walk could
+    not read through, "account picker" or "year picker", so the list is not
+    whole however much was read. not_read, why a picker on the page gave
+    nothing to walk, in our own words, "" when it answered."""
     whole = False
     years: tuple = ()
     drawn = False
@@ -453,6 +456,8 @@ class Read(list):
     unread = 0
     heads: tuple = ()
     unchosen = 0
+    passed_over: tuple = ()
+    not_read = ""
 
 
 def _read(items=(), **facts) -> Read:
@@ -506,12 +511,17 @@ _ROW_JS = r"""() => {
 }"""
 
 
-def collect_documents(page) -> List[RawDoc]:
+def collect_documents(page, or_raise: bool = False) -> List[RawDoc]:
+    """The page's rows as its text reads them. With `or_raise` a read that
+    fails raises RowUnread, since rows that would not be read are not a
+    page without rows."""
     docs: List[RawDoc] = []
     seen = set()
     try:
         rows = page.evaluate(_ROW_JS)
     except Exception as e:
+        if or_raise:
+            raise RowUnread("the page's rows would not answer") from e
         log.info("row scrape failed: %s", e)
         rows = []
     for i, r in enumerate(rows):
@@ -570,6 +580,16 @@ def control_identity(loc) -> str:
         return ""
 
 
+def _identity_or_none(loc) -> Optional[str]:
+    """control_identity, or None when the control would not answer. The
+    money guard refuses a control with no identity, so a picker that did
+    not answer read as one refused, and then as no picker at all."""
+    try:
+        return loc.evaluate(_IDENTITY_JS) or ""
+    except Exception:
+        return None
+
+
 def is_money_control(identity: str) -> bool:
     if not identity:
         return True
@@ -619,11 +639,16 @@ def describe_selects(page, limit: int = 12) -> List[dict]:
 # account and read the page under it (#106).
 PLACEHOLDER_RE = re.compile(r"^\W*(choose|select|pick)\b", re.I)
 
+# The options of a dropdown that can be chosen. A turned off one cannot be,
+# and choosing it waited out its time and was taken for an account or a
+# year that would not take.
+_ENABLED_OPTION = "option:not([disabled])"
+
 
 def account_select(page):
     for s, _identity in _safe_selects(page):
         try:
-            opts = [o.strip() for o in s.locator("option").all_inner_texts()]
+            opts = [o.strip() for o in s.locator(_ENABLED_OPTION).all_inner_texts()]
         except Exception:
             continue
         accts = [o for o in opts if o and _ACCOUNT_HINT_RE.search(o)
@@ -636,7 +661,7 @@ def account_select(page):
 def year_select(page):
     for s, _identity in _safe_selects(page):
         try:
-            opts = [o.strip() for o in s.locator("option").all_inner_texts()]
+            opts = [o.strip() for o in s.locator(_ENABLED_OPTION).all_inner_texts()]
         except Exception:
             continue
         years = [o for o in opts if re.fullmatch(r"20\d{2}", o)]
@@ -675,14 +700,20 @@ def _row_own_date(text: str) -> str:
     return date
 
 
-def usbank_collect(page) -> List[dict]:
+def usbank_collect(page) -> Read:
+    """The page's text read for statements, under each account and year its
+    dropdowns offer. A year or an account whose choice did not take was not
+    read, and is named in passed_over, where it used to be passed over and
+    the list noted whole without it. Rows that would not be read raise
+    RowUnread."""
     docs: List[dict] = []
     seen = set()
+    passed_over = set()
 
     def grab(acct: str):
         expand_all(page)
         scroll_full_page(page, rounds=3)
-        for r in collect_documents(page):
+        for r in collect_documents(page, or_raise=True):
             date = _row_own_date(r.date_text)
             if not date:
                 continue
@@ -699,6 +730,8 @@ def usbank_collect(page) -> List[dict]:
             for y in years:
                 if _select_option(page, sel, y):
                     grab(acct)
+                else:
+                    passed_over.add("year picker")
         else:
             grab(acct)
 
@@ -714,12 +747,18 @@ def usbank_collect(page) -> List[dict]:
         # and select_account opens it again before it chooses on it.
         _note_choice(page, True)
         for a in accounts:
+            if FORBIDDEN_CONTROL_RE.search(a):
+                # Never chosen (_select_option), and no account whose
+                # statements are listed.
+                log.info("refusing account option %r", a[:60])
+                continue
             if not _select_option(page, acct_sel, a):
+                passed_over.add("account picker")
                 continue
             walk_years(re.sub(r"\s+", " ", a).strip())
     else:
         walk_years("")
-    return docs
+    return _read(docs, passed_over=tuple(sorted(passed_over)))
 
 
 SEL = {
@@ -995,18 +1034,16 @@ def _plain_account_select(page):
     return sel.first
 
 
-def _plain_account_options(sel) -> List[Tuple[str, str]]:
+def _plain_account_options(sel, or_none: bool = False) -> Optional[List[Tuple[str, str]]]:
     """Each option of a plain picker as (its label as the app reads it, the
-    page's own label for it), read at once."""
+    page's own label for it), read at once. Options that would not answer
+    are none, or with `or_none` None, which is never a picker without
+    options."""
     try:
         return [(" ".join(str(t).split()), str(own))
                 for t, own in sel.evaluate(_OPTIONS_JS, timeout=5000)]
     except Exception:
-        return []
-
-
-def _plain_account_labels(sel) -> List[str]:
-    return [label for label, _own in _plain_account_options(sel)]
+        return None if or_none else []
 
 
 def _option_index(labels: List[str], label: str) -> int:
@@ -1042,10 +1079,38 @@ def account_name(page) -> str:
     return text
 
 
+# How long an opened picker is given to draw its options, and how long once
+# more when it drew none, since options drawn after the first look are not
+# a picker without options.
+OPTIONS_WAIT_MS = (1200, 3000)
+
+
+def _picker_labels(page, btn, wanted=bool) -> List[str]:
+    """The words of each option the page shows once a picker is opened by
+    its button, looked at once more when none is `wanted`, the picker closed
+    again after. A plain <select>'s options are options too, the account
+    picker's beside the year picker's. Raises what Playwright raises."""
+    btn.click()
+    labels: List[str] = []
+    for wait in OPTIONS_WAIT_MS:
+        page.wait_for_timeout(wait)
+        labels = [" ".join(t.split()) for t in page.get_by_role("option").all_inner_texts()]
+        if any(wanted(t) for t in labels):
+            break
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(400)
+    return labels
+
+
 def account_options(page) -> Read:
     """Every account the picker offers, by its whole label. Whole when they
     came from a plain picker's own options, none but its prompt was refused
-    and none is offered twice, so that a walk of them is every account."""
+    and none is offered twice, so that a walk of them is every account.
+
+    not_read says why when the picker is on the page and did not say which
+    accounts it offers, it or its options would not answer or it listed no
+    option. Only the account on show could then be read. One the guard
+    refuses is not that, since it is never read whatever it says."""
     try:
         holder = page.locator(SEL["account"]).first
         if holder.count() == 0:
@@ -1054,7 +1119,10 @@ def account_options(page) -> Read:
         if btn.count() == 0:
             sel = _plain_account_select(page)
             if sel is not None:
-                labels = _plain_account_labels(sel)
+                options = _plain_account_options(sel, or_none=True)
+                if not options:
+                    return _read(not_read="the account picker did not list its accounts")
+                labels = [label for label, _own in options]
                 out = [x for x in labels if is_card_control(x)]
                 held_back = 0
                 for x in labels:
@@ -1067,30 +1135,36 @@ def account_options(page) -> Read:
                              pick_each=True)
             one = account_name(page)
             return Read([one] if one else [])
+    except PickerRefused:
+        return Read()
     except Exception:
+        return _read(not_read="the account picker would not answer")
+    identity = _identity_or_none(btn.first)
+    if identity is None:
+        return _read(not_read="the account picker would not answer")
+    if is_money_control(identity):
+        log.info("refusing account picker (money control): %s", identity[:120])
         return Read()
     try:
-        identity = control_identity(btn.first)
-        if is_money_control(identity):
-            log.info("refusing account picker (money control): %s", identity[:120])
-            return Read()
-        btn.first.click()
-        page.wait_for_timeout(1200)
-        labels = [" ".join(t.split())
-                  for t in page.get_by_role("option").all_inner_texts()]
-        page.keyboard.press("Escape")
-        page.wait_for_timeout(400)
-        out = [x for x in labels if is_card_control(x)]
-        for x in labels:
-            if x and x not in out:
-                log.info("refusing account option %r", x[:60])
-        # Never whole. This picker's choice is not read back, nor its list
-        # seen to draw again, so a walk of it judges no record (#106).
-        return Read(out)
+        labels = _picker_labels(page, btn.first)
     except Exception as e:
         log.info("account options failed: %s", e)
+        try:
+            page.keyboard.press("Escape")
+        except Exception:
+            pass
         one = account_name(page)
-        return Read([one] if one else [])
+        return _read([one] if one else [], not_read="the account picker would not list its accounts")
+    if not any(labels):
+        one = account_name(page)
+        return _read([one] if one else [], not_read="the account picker listed no account")
+    out = [x for x in labels if is_card_control(x)]
+    for x in labels:
+        if x and x not in out:
+            log.info("refusing account option %r", x[:60])
+    # Never whole. This picker's choice is not read back, nor its list
+    # seen to draw again, so a walk of it judges no record (#106).
+    return Read(out)
 
 
 def select_account(page, label: str) -> bool:
@@ -1199,25 +1273,35 @@ def _select_plain_account(page, sel, label: str) -> bool:
     return True
 
 
-def _year_button(page):
+def _year_picker(page):
+    """The year picker's button, as (button, ""). (None, "") when the page
+    shows no such button or the guard refuses it, and (None, why) when it
+    shows one that would not answer, which is never a page without one."""
     try:
         btn = page.locator(SEL["year_button"])
         if btn.count() == 0:
-            return None
+            return None, ""
     except Exception:
-        return None
+        return None, "the year picker would not answer"
     try:
         name = " ".join((btn.first.inner_text(timeout=1500) or "").split())
     except Exception:
-        name = ""
+        return None, "the year picker would not answer"
 
     if not is_safe_control(name):
         log.info("year filter %r did not clear the guard", name[:60])
-        return None
-    if is_money_control(control_identity(btn.first)):
+        return None, ""
+    identity = _identity_or_none(btn.first)
+    if identity is None:
+        return None, "the year picker would not answer"
+    if is_money_control(identity):
         log.info("refusing year filter (money control)")
-        return None
-    return btn.first
+        return None, ""
+    return btn.first, ""
+
+
+def _year_button(page):
+    return _year_picker(page)[0]
 
 
 def reset_to_newest_period(page) -> str:
@@ -1237,26 +1321,34 @@ def current_period(page) -> str:
         return ""
 
 
-def period_options(page) -> List[str]:
-    btn = _year_button(page)
+_YEAR_OPTION_RE = re.compile(r"20\d{2}")
+
+
+def period_options(page) -> Read:
+    """The years the year picker offers, newest first, and none for a page
+    without one. not_read says why when the picker is on the page and gave
+    no year, it would not answer, would not list its years or listed none,
+    since then only the year on show could be read. One the guard refuses
+    is not that, since it is never pressed whatever it says."""
+    btn, why = _year_picker(page)
+    if why:
+        return _read(not_read=why)
     if btn is None:
         sel, years = year_select(page)
-        return sorted(set(years), reverse=True) if years else []
+        return Read(sorted(set(years), reverse=True) if years else [])
     try:
-        btn.click()
-        page.wait_for_timeout(1200)
-        years = sorted({t.strip() for t in page.get_by_role("option").all_inner_texts()
-                        if re.fullmatch(r"20\d{2}", t.strip())}, reverse=True)
-        page.keyboard.press("Escape")
-        page.wait_for_timeout(400)
-        return years
+        labels = _picker_labels(page, btn, wanted=_YEAR_OPTION_RE.fullmatch)
     except Exception as e:
         log.info("period options failed: %s", e)
         try:
             page.keyboard.press("Escape")
         except Exception:
             pass
-        return []
+        return _read(not_read="the year picker would not list its years")
+    years = sorted({t for t in labels if _YEAR_OPTION_RE.fullmatch(t)}, reverse=True)
+    if not years:
+        return _read(not_read="the year picker listed no year")
+    return Read(years)
 
 
 def select_period(page, year: str) -> bool:
@@ -1357,23 +1449,24 @@ def is_safe_row_control(name: str) -> bool:
 
 
 def _row_controls(page, limit: int = 400):
+    """Each link and button whose name says it is a document's, with its
+    words. Raises RowUnread when they would not be counted or one would not
+    give its words, since that one may be a statement, where it used to be
+    passed over and the names read whole without it."""
     for role in ("link", "button"):
         try:
             loc = page.get_by_role(role, name=SAFE_DOC_CONTROL_RE)
             n = min(loc.count(), limit)
-        except Exception:
-            continue
+        except Exception as e:
+            raise RowUnread("the statement links would not answer") from e
         for i in range(n):
             c = loc.nth(i)
             try:
                 name = " ".join((c.get_attribute("aria-label") or "").split())
-            except Exception:
-                name = ""
-            if not name:
-                try:
+                if not name:
                     name = " ".join((c.inner_text(timeout=800) or "").split())
-                except Exception:
-                    continue
+            except Exception as e:
+                raise RowUnread("a statement link would not answer") from e
             if name:
                 yield c, name
 
@@ -1396,12 +1489,14 @@ def _rows_generic(page, account: str) -> List[dict]:
 
 def read_rows(page, account: str = "") -> Read:
     """The statements the list shows, drawn when a statements section was
-    on the page to read them from."""
+    on the page to read them from. A list that would not be counted raises
+    RowUnread, where it was read as a page with no list, or as a list with
+    nothing in it."""
     account = account or account_name(page)
     try:
         have_list = page.locator(f"{SEL['list']} {SEL['section']}").count() > 0
-    except Exception:
-        have_list = False
+    except Exception as e:
+        raise RowUnread("the statement list would not answer") from e
     if not have_list:
         # Where the statement list or the account picker is on the page, a
         # list with no section is one still drawing or with nothing in it.
@@ -1409,8 +1504,8 @@ def read_rows(page, account: str = "") -> Read:
         # year 2031", for a statement of December 31st (#106).
         try:
             ours = page.locator(f"{SEL['list']}, {SEL['account']}").count() > 0
-        except Exception:
-            ours = True
+        except Exception as e:
+            raise RowUnread("the statement list would not answer") from e
         if ours:
             log.info("no statements section in the list")
             return Read()
@@ -1484,6 +1579,26 @@ def _year_on_show(page) -> str:
     return years.pop() if len(years) == 1 else ""
 
 
+# How many more times, a second apart, the year picker is read after a
+# choice that it shows another year for, before the choice is taken not to
+# have been made, since its label can be drawn again a moment after it.
+CHOICE_LOOKS = 3
+
+
+def _shows_another_year(page, year: str) -> bool:
+    """Whether the year picker shows one year, not `year`, after `year` was
+    chosen, at every look. A picker that shows no year to be read, or more
+    than one, says nothing either way, and is not taken for one that went
+    back."""
+    for look in range(CHOICE_LOOKS + 1):
+        shown = set(re.findall(r"(?<!\d)20\d{2}(?!\d)", _year_on_show(page)))
+        if len(shown) != 1 or shown == {str(year)}:
+            return False
+        if look < CHOICE_LOOKS:
+            page.wait_for_timeout(1000)
+    return True
+
+
 def read_card_rows(page, label: str) -> List[dict]:
     if not select_account(page, label):
         return []
@@ -1505,16 +1620,25 @@ def usbank_collect_structured(page, keep=None) -> Read:
     download chooses again. Whole when every account the picker offered
     was read from its options, chosen and walked, and years holds each year
     whose list drew under every account, the part of the history a record
-    may be judged by."""
+    may be judged by.
+
+    passed_over names each picker the walk could not read through, one
+    whose accounts or years it would not list, or a choice of account or
+    year that did not take. What was read is kept, and the list is never
+    noted whole without the rest (#106 review). The statements page not
+    opening again raises RowUnread, since no list on it was read."""
     if not ensure_statements(page):
-        log.info("documents page not reachable")
-        return Read()
+        raise RowUnread("the statements page did not open again")
     if not _wait_for_list(page):
         log.info("U.S. Bank: no statement list drew in %d s", LIST_WAIT_MS // 1000)
     if not _wait_for_year_picker(page):
         log.info("U.S. Bank: no year picker drew in %d s", YEAR_WAIT_MS // 1000)
 
+    passed_over = set()
     picked = account_options(page)
+    if getattr(picked, "not_read", ""):
+        log.info("U.S. Bank: %s", picked.not_read)
+        passed_over.add("account picker")
     accounts = list(picked) or [account_name(page)]
     whole = bool(getattr(picked, "whole", False))
     pick_each = bool(getattr(picked, "pick_each", False))
@@ -1528,8 +1652,13 @@ def usbank_collect_structured(page, keep=None) -> Read:
             log.info("  could not choose the account %r", (acct or "(account)")[:60])
             whole = False
             unchosen += 1
+            passed_over.add("account picker")
             continue
-        periods = period_options(page) or [""]
+        offered = period_options(page)
+        if getattr(offered, "not_read", ""):
+            log.info("U.S. Bank: %s", offered.not_read)
+            passed_over.add("year picker")
+        periods = list(offered) or [""]
         if keep is not None:
             wanted = [p for p in periods if keep(p)]
             if len(wanted) < len(periods):
@@ -1541,7 +1670,13 @@ def usbank_collect_structured(page, keep=None) -> Read:
         for period in periods:
             if period and not select_period(page, period):
                 whole = False
+                passed_over.add("year picker")
                 continue
+            if period and _shows_another_year(page, period):
+                # The list on show is another year's, read as that year's
+                # rows are always read, and this year was not.
+                log.info("  the year picker shows another year after %s was chosen", period)
+                passed_over.add("year picker")
             rows = read_rows(page, acct)
             if not rows:
                 # An empty list may be one still loading. It is read again
@@ -1596,7 +1731,7 @@ def usbank_collect_structured(page, keep=None) -> Read:
                  twins)
     out.sort(key=lambda r: (r["date"], r["account"]), reverse=True)
     return _read(out, whole=whole and bool(years), years=tuple(sorted(years or ())),
-                 shown=shown, unchosen=unchosen)
+                 shown=shown, unchosen=unchosen, passed_over=tuple(sorted(passed_over)))
 
 
 # A Download control for a statement, a button or a link whose name says

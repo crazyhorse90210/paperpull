@@ -209,7 +209,8 @@ def test_a_list_that_could_not_choose_an_account_puts_nothing_aside(page, make_a
     monkeypatch.setattr(site, "select_account",
                         lambda pg, label: False if label == CARD else real(pg, label))
     app = make_app(page, "--discover")
-    app.cmd_discover()
+    with pytest.raises(SystemExit):
+        app.cmd_discover()
     assert _states(app, keys) == [State.NEEDS_MANUAL_REVIEW.value] * 2
 
 
@@ -217,16 +218,20 @@ def test_records_of_the_page_text_are_put_aside_by_a_walk_not_whole(page, make_a
     """The pickers never make a record titled with a chunk of the page, so a
     walk that read statements puts those aside though it could not choose
     the card (#117). Resume then never presses one, where one of the
-    tester's had saved a statement a second time under a (2) name."""
+    tester's had saved a statement a second time under a (2) name. The
+    list was not read whole without the card, so Resume stops at its end
+    rather than finish."""
     show(page)
     keys = _seed(make_app(page), BOGUS)
     real = site.select_account
     monkeypatch.setattr(site, "select_account",
                         lambda pg, label: False if label == CARD else real(pg, label))
     app = make_app(page, "--discover")
-    app.cmd_discover()
+    with pytest.raises(SystemExit):
+        app.cmd_discover()
     assert _states(app, keys) == [State.NO_LONGER_LISTED.value] * 3
-    make_app(page, "--resume").cmd_resume()
+    with pytest.raises(SystemExit):
+        make_app(page, "--resume").cmd_resume()
     assert sorted(make_app.pressed) == [r for r in LISTED if r[0] != CARD]
 
 
@@ -234,13 +239,14 @@ def test_a_run_whose_list_was_not_whole_still_presses_only_what_it_read(
         page, make_app, monkeypatch):
     """Nothing the pickers made is put aside by a list that could not choose
     the card, and the run still never presses the card's records, which
-    this run's list did not read."""
+    this run's list did not read. It stops at its end rather than finish."""
     show(page)
     _seed(make_app(page), PICKERS_OWN)
     real = site.select_account
     monkeypatch.setattr(site, "select_account",
                         lambda pg, label: False if label == CARD else real(pg, label))
-    make_app(page, "--all").cmd_run("all")
+    with pytest.raises(SystemExit):
+        make_app(page, "--all").cmd_run("all")
     assert sorted(make_app.pressed) == [r for r in LISTED if r[0] != CARD]
 
 
@@ -250,7 +256,8 @@ def test_discover_says_when_an_account_could_not_be_chosen(page, make_app, monke
     real = site.select_account
     monkeypatch.setattr(site, "select_account",
                         lambda pg, label: False if label == CARD else real(pg, label))
-    make_app(page, "--discover").cmd_discover()
+    with pytest.raises(SystemExit):
+        make_app(page, "--discover").cmd_discover()
     assert "1 account(s) in U.S. Bank's account picker could not be chosen" in capsys.readouterr().out
 
 
