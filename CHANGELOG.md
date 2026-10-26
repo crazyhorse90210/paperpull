@@ -147,6 +147,27 @@ All notable changes to PaperPull are recorded here. Versioning follows
   read as whole. It is counted now, read by its value or an image's alt
   too. A box to tick or a text field reading the same words is still not a
   control for more.
+- **Schwab opens its statements page at its new address (#122).** Schwab
+  moved Statements & Tax Forms from /app/accounts/statements to
+  /retail/accounts/statements, and the old address now redirects there.
+  The app knew only the old one, so every run stopped saying it could not
+  open the statements page. It now takes either, and only as the page's own
+  address on Schwab's own host, never one named in another page's query or
+  after its #. Thanks to @davidrudnick for the fix and the live run.
+- **Capital One and Schwab no longer download a statement saved before
+  0.34 again (#122).** Both keep a document under its account, and up to
+  0.33 both numbered the documents of one day, type and title within each
+  account. From 0.34 they were numbered across accounts, so when two
+  accounts each had one such statement, both saved at 0, the second
+  account's found 0 taken, was numbered 1, and was downloaded again beside
+  the one saved as a "(2)" copy. Each account's documents are numbered on
+  their own again. An archive numbered across accounts from 0.34 to 0.58
+  keeps every number it has, two documents alike in one account included,
+  and one that already took the "(2)" copies keeps both records and
+  fetches nothing more. @davidrudnick found it in an archive going back to
+  0.19 and wrote the Schwab fix, which on that archive fetched exactly the
+  20 new documents. Capital One had the same numbering and takes the same
+  fix.
 
 ## [0.58.0] - 2026-10-24
 

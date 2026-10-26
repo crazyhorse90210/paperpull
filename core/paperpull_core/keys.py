@@ -136,26 +136,33 @@ def _group_of(item, fields):
     return tuple(_tidy(item.get(f, "")) for f in fields)
 
 
-def _numbered(rows, existing, fields, taken):
+def _numbered(rows, existing, fields, taken, every=False):
     """stable_occurrences, with the numbers `taken` already holds for each
-    group given to no row here."""
+    group given to no row here.
+
+    With `every`, the rows that are what several records are take each of
+    those records' numbers, lowest first, before any number none of them
+    holds. Otherwise only the first record's number is kept for them."""
     known = {}
     for record in (existing or {}).values():
         if not isinstance(record, dict):
             continue
-        what = _what_it_is(record, fields)
-        if what not in known:
-            known[what] = record.get("occurrence", 0) or 0
+        numbers = known.setdefault(_what_it_is(record, fields), [])
+        if every or not numbers:
+            numbers.append(record.get("occurrence", 0) or 0)
+    for numbers in known.values():
+        numbers.sort()
 
     out = [None] * len(rows)
     for i, row in enumerate(rows):
-        group = _group_of(row, fields)
-        what = _what_it_is(row, fields)
-        if what in known:
-            occurrence = known.pop(what)
-            if occurrence not in taken.setdefault(group, set()):
-                taken[group].add(occurrence)
+        used = taken.setdefault(_group_of(row, fields), set())
+        numbers = known.get(_what_it_is(row, fields))
+        while numbers:
+            occurrence = numbers.pop(0)
+            if occurrence not in used:
+                used.add(occurrence)
                 out[i] = occurrence
+                break
 
     for i, row in enumerate(rows):
         if out[i] is not None:
@@ -223,6 +230,15 @@ def told_apart(rows, existing=None, fields=("title", "date"), id_field="document
     row is the saved one cannot be told, so the row is not sure, and the
     app writes nothing of it over a record and downloads nothing for it.
 
+    Rows alike take the numbers of every record left over that they are,
+    lowest first, before a number none of those holds. stable_occurrences
+    keeps only one of them, which comes to the same whenever the archive was
+    numbered by these same `fields`. Capital One's and Schwab's were not.
+    Both numbered each account on its own up to 0.33 and again since #122,
+    and across accounts from 0.34 to 0.58, so one account's two documents
+    alike can hold 1 and 2. Given 1 and then the lowest number free, the second
+    was taken for a new document at 0.
+
     Answers (occurrence, sure) for each row, in order.
     """
     rows = list(rows)
@@ -278,7 +294,7 @@ def told_apart(rows, existing=None, fields=("title", "date"), id_field="document
     unmatched = {key: records[key] for key in records if key not in matched
                  and _what_it_is(records[key], fields) not in news}
     for i, occurrence in zip(placed, _numbered([rows[i] for i in placed],
-                                               unmatched, fields, taken)):
+                                               unmatched, fields, taken, every=True)):
         out[i] = occurrence
     for i in new:
         # A record left over and never saved is filled first, since nothing

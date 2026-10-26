@@ -434,8 +434,14 @@ class App:
         # with the document it was given to, found by the id it was saved
         # under before its place, and a row that cannot be told apart from
         # one saved is not taken for it (paperpull_core.keys.told_apart).
+        # Each account's are numbered on their own, as the key holds the
+        # account and as the site numbered them up to 0.33. From 0.34 to
+        # 0.58 they were numbered across accounts, so a statement saved at 0
+        # in a second account found 0 taken and was downloaded again. An
+        # archive numbered across accounts keeps its numbers, since a row
+        # takes those its records hold first.
         self._placed = {}
-        alike = ("doc_type", "title", "date")
+        alike = ("doc_type", "title", "date", "account")
         for d, (occ, sure), place in zip(raw, _told_apart(
                 raw, self.discovery.data, fields=alike, saved=self.progress.data),
                 _places(raw, fields=alike)):
