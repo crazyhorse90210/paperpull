@@ -137,6 +137,16 @@ All notable changes to PaperPull are recorded here. Versioning follows
   to Manual Review. Both readings count those inputs now, as they count
   buttons. A box to tick or a text field named Bill details is still not
   one.
+- **Bilt stops the list when the statements sheet shows a Load more drawn
+  as an input.** A sheet showing a control for more, older or earlier
+  statements stops the list, since the statements answer and the sheet
+  could then agree on a part of it. That check counted only links and
+  buttons, and read a control's text, label and title. A Load more drawn
+  as an input of type button, submit, image or reset, which the browser
+  gives a button's role, was not counted, so a part of the list could be
+  read as whole. It is counted now, read by its value or an image's alt
+  too. A box to tick or a text field reading the same words is still not a
+  control for more.
 
 ## [0.58.0] - 2026-10-24
 

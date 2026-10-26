@@ -112,6 +112,40 @@ def test_a_hidden_control_for_more_is_not_counted(wallet):
     assert state["pagers"] == []
 
 
+# A control for more drawn as an <input> of a type Playwright gives a
+# button's role, named for a screen reader or by what it shows, its value or
+# an image's alt. It was no control to the count, so the list went on with a
+# part of it read as whole. A box to tick or a text field reading the words
+# is still no control.
+INPUT_KINDS = ("button", "submit", "image", "reset")
+
+
+def _input_for_more(kind, named_by):
+    size = ' src="data:," width="24" height="24"' if kind == "image" else ""
+    if named_by == "aria-label":
+        return '<input type="%s" aria-label="Load more"%s>' % (kind, size)
+    return '<input type="%s" %s="Load more"%s>' % (kind, "alt" if kind == "image" else "value", size)
+
+
+@pytest.mark.parametrize("named_by", ["aria-label", "what it shows"])
+@pytest.mark.parametrize("kind", INPUT_KINDS)
+@pytest.mark.parametrize("inline", [False, True])
+def test_a_control_for_more_drawn_as_an_input_is_counted(wallet, kind, named_by, inline):
+    state = read(wallet, page_of(_input_for_more(kind, named_by), inline=inline))
+    assert state["pagers"] == [1]
+    with pytest.raises(site.ListStopped):
+        site._no_pager(state)
+
+
+@pytest.mark.parametrize("field", ['<input type="text" value="Load more">',
+                                   '<input type="checkbox" aria-label="Load more">'],
+                         ids=["a text field", "a box to tick"])
+def test_a_field_reading_load_more_is_not_counted(wallet, field):
+    state = read(wallet, page_of(field))
+    assert state["pagers"] == []
+    assert site.sheet_dates(state) == ["2026-08-06", "2026-09-06", "2026-10-06"]
+
+
 
 # The wallet as a signed-out visit drew it on 2026-10-15, at /wallet itself.
 SIGNED_OUT = """<!doctype html><html><body>
