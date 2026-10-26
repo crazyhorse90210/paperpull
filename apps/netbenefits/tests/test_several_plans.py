@@ -1525,6 +1525,28 @@ def test_a_saved_combined_statement_counts_only_while_its_plans_header_names_its
     assert_his_457_filed(next_run(tmp_path, page), tmp_path)
 
 
+def test_a_held_statement_moved_with_a_minimal_history_is_never_filed_unjudged(monkeypatch, tmp_path):
+    """tools/migrate.py --minimal leaves out held and a combined statement's
+    employer. A statement held when its history moved is then set aside like
+    any other in Manual Review, and once its file there is gone it is made
+    and judged again."""
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[3] / "tools"))
+    import migrate
+    app, page = his_login(monkeypatch, tmp_path)
+    app.process([d for d in app._select() if d.plan == site.plan_digest(D457)])
+    assert_his_457_held(app, tmp_path)
+    for key, rec in list(app.progress.data.items()):
+        app.progress.data[key] = migrate._skip_fields(rec, "NetBenefits")
+    app.progress.save()
+    moved = next_run(tmp_path, page)
+    own = record_of(moved, D457)
+    assert "held" not in own and own["state"] == State.NEEDS_MANUAL_REVIEW.value
+    assert not own.get("downloaded_ok") and Path(own["pdf_path"]).parent == moved.paths.manual_review
+    assert not any("457b" in p.name for p in (tmp_path / "out" / "Statements").glob("*.pdf"))
+    Path(own["pdf_path"]).unlink()
+    assert_his_457_filed(next_run(tmp_path, page), tmp_path)
+
+
 def test_a_held_statement_the_later_run_can_tell_is_not_its_plans_is_set_aside_for_good(
         monkeypatch, tmp_path):
     """Once the voluntary plan is placed, a statement printing the other

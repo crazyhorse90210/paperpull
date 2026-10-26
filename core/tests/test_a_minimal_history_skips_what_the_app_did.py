@@ -70,6 +70,19 @@ DECIDES_NOTHING = {
         "period": "copied onto a form moved to the key of its year",
         "tax_year": "read off the page's listing of the form, not a saved record",
     },
+    # _place_from_saved goes through the saved records for combined
+    # statements, and asks downloaded_ok only to read back a file this app
+    # kept. It places a plan whose page names no employer, for a statement
+    # held in Manual Review, and decides no download.
+    "netbenefits": {
+        "employer": "the employer a saved combined statement was made under, an employer's "
+                    "name --minimal leaves out. Without it the statement places no plan, and "
+                    "a held statement waits in Manual Review, as before any was saved",
+        "digest": "read off this run's plan list (note_combined, plans_named, employer_of)",
+        "path": "read off this run's plan list (plans_named)",
+        "heading": "read off this run's plan list (_name_key)",
+        "label": "read off this run's plan list (_name_key)",
+    },
 }
 
 # Walks of the saved records that decide no download, each with why, by the
@@ -139,6 +152,21 @@ WALKS_DECIDE_NOTHING = {
             "asked on the run that would make its record",
     },
     "chase": {"chase_docs.migrate_legacy_keys": CUT_KEY},
+    "netbenefits": {
+        "netbenefits_docs.App._judge_held":
+            "files a statement held in Manual Review or sets it aside, and downloads nothing. "
+            "--minimal leaves out held, so after a move such a statement is a Manual Review "
+            "record like any set aside, never filed, and is made and judged again once its "
+            "file is gone",
+        "netbenefits_docs.App._own_or_combined":
+            "checks a held statement _judge_held hands it and files it under its summary",
+        "netbenefits_docs.App._place_from_saved":
+            "reads saved combined statements again to place a plan for a held statement, and "
+            "downloads nothing. Without the employer --minimal leaves out it places nothing",
+        "netbenefits_docs.App._record": "writes the record of a held statement once judged",
+        "netbenefits_docs.App._write_row":
+            "writes that statement's index row, and the index does not move with a history",
+    },
     "newrez": {
         "newrez_docs._statement_months":
             "the months of the statements discovery and the saved records know, to tell a "
