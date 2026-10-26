@@ -403,20 +403,28 @@ def _json(path, default=None):
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else default
 
 
-def run(folder, cdp_url, *flags) -> dict:
+def run(folder, cdp_url, *flags, stops=False) -> dict:
     """One run of the app on the made-up site, and what it did. What it
     printed, with its line breaks read as spaces, since a message is wrapped
     wherever it happens to fill a line, the result it gave the panel, the
     failure files it was asked for and wrote, the purchases it took to the
     receipt step, what it left in progress.json, the CSVs and the file to
-    attach, and the orders the purchases tool builds from its Order History."""
+    attach, and the orders the purchases tool builds from its Order History.
+    With `stops` the run has to stop rather than finish, leaving on
+    SystemExit, which the core reports to the panel as stopped."""
     diagnostics = folder / "out" / "Diagnostics"
     before = set(diagnostics.glob("failure-*.json"))
     SITE.failures.clear()
     SITE.asked.clear()
     said = io.StringIO()
     with contextlib.redirect_stdout(said):
-        code = app_mod.main([*flags, "--config", str(config_for(folder, cdp_url))])
+        argv = [*flags, "--config", str(config_for(folder, cdp_url))]
+        if stops:
+            with pytest.raises(SystemExit) as stopped:
+                app_mod.main(argv)
+            code = stopped.value.code
+        else:
+            code = app_mod.main(argv)
     out = " ".join(said.getvalue().split())
     assert code == 0, out
     result = re.findall(r"PAPERPULL_RUN_RESULT (\{[^}]*\})", out)
@@ -437,6 +445,7 @@ def run(folder, cdp_url, *flags) -> dict:
             "discovery": _json(folder / "out" / "discovery.json", {}),
             "attempts": attempt.get("attempts") if isinstance(attempt, dict) else None,
             "rows": rows,
+            "noted_whole": _json(folder / "out" / "last-listing.json", {}).get("complete"),
             "orders": (export.orders_from(export.load_purchases("Meijer", history))
                        if history.exists() else []),
             "summary": summary.read_text(encoding="utf-8") if summary.exists() else ""}
@@ -715,19 +724,64 @@ def test_a_list_that_never_stops_changing_is_never_read_as_whole(attached, tmp_p
     the app counts them, every one newer than the purchase. However long it
     is watched the list was never seen whole, so the purchase is not said to
     have dropped off it. It is a failure, and the next run looks for it
-    again."""
+    again.
+
+    The run's own discovery met the same list. It read the rows it found,
+    and counted the tab as read, so the list was noted whole and a Resume
+    after it read no list. Now a tab still changing when the wait runs out
+    is not counted as read, the list is not noted whole, and the run goes
+    on with what it found and stops at its end rather than finish
+    (review)."""
     monkeypatch.setattr(site, "LIST_WAIT_MS", 3000, raising=False)
     SITE.orders = orders_page([GONE])
     run(tmp_path, attached, "--discover")
     SITE.orders = orders_page([], grows=True, endless=True)
     took = run(tmp_path, attached, "--all", "--yes", "--start-date", GONE.iso,
-               "--end-date", GONE.iso)
+               "--end-date", GONE.iso, stops=True)
 
     rec = by_date(took["progress"])[GONE.iso]
     assert rec["state"] == "Failed", took["out"]
     assert "Meijer no longer lists" not in took["out"]
     [attempt] = took["attempts"] or [{}]
     assert attempt.get("outcome") == "its row is not on the page", attempt
+    settled = notes_in(attempt, "the rows once they settled")
+    assert settled and not any(n["settled"] for n in settled), attempt
+    assert all(not n["discovery_read_the_tab"] and n["back_twenty_months"]
+               for n in judged(attempt)), attempt
+    assert ("The rows on Meijer's In-Store Receipts tab were still changing after 3 seconds, "
+            "so the order list was not read whole.") in took["out"], took["out"]
+    assert "Not all of Meijer's order list was read, so this run stops here" in took["out"]
+    assert took["noted_whole"] is False
+    assert ("read both tabs of the order list",
+            "the rows on a tab never settled") in took["failures"]
+
+
+def test_a_list_that_stops_changing_only_in_discovery_is_still_never_read_as_whole(
+        attached, tmp_path, monkeypatch, growing):
+    """Discovery reads the tab once its rows stop changing, so the tab
+    counts as read and the list is noted whole. The purchase's own looks
+    then meet rows that never stop coming. However long they are watched
+    the list was never seen whole there, so the purchase is not said to
+    have dropped off it, with every other check passing."""
+    monkeypatch.setattr(site, "LIST_WAIT_MS", 3000, raising=False)
+    SITE.orders = orders_page([GONE])
+    run(tmp_path, attached, "--discover")
+    SITE.orders = orders_page([GROWING[0]])
+    real_discover = app_mod.App.cmd_discover
+
+    def discover_then_endless(self, *args, **kwargs):
+        found = real_discover(self, *args, **kwargs)
+        SITE.orders = orders_page([], grows=True, endless=True)
+        return found
+    monkeypatch.setattr(app_mod.App, "cmd_discover", discover_then_endless)
+    took = run(tmp_path, attached, "--all", "--yes", "--start-date", GONE.iso,
+               "--end-date", GONE.iso)
+
+    rec = by_date(took["progress"])[GONE.iso]
+    assert rec["state"] == "Failed", took["out"]
+    assert "Meijer no longer lists" not in took["out"]
+    assert took["noted_whole"] is True
+    [attempt] = took["attempts"] or [{}]
     settled = notes_in(attempt, "the rows once they settled")
     assert settled and not any(n["settled"] for n in settled), attempt
     assert all(n["discovery_read_the_tab"] and n["back_twenty_months"] for n in judged(attempt))

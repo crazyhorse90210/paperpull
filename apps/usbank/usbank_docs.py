@@ -124,6 +124,10 @@ class App:
     # The keys of every statement this run's list read, or None for a run
     # that read no list (Resume). A run that read one presses only these.
     _listed_keys = None
+    # Set when the list's walk passed over a picker it could not read
+    # through, so the run goes on with what it read and stops at its end
+    # rather than finish (_stop_if_cut_short).
+    _list_cut_short = False
 
     def __init__(self, args):
         self.args = args
@@ -444,7 +448,11 @@ class App:
             marked += 1
         return marked
 
-    def cmd_discover(self, quiet: bool = False) -> int:
+    def cmd_discover(self, quiet: bool = False, finish: bool = True) -> int:
+        # A list read only in part (passed_over) keeps the statements it
+        # found, and Pilot and Run All go on with them, but the run stops at
+        # its end rather than finish. With finish=False the caller does that
+        # once it has used them.
         # A listing that stops on the way, however it stops, is noted as one
         # that stopped, for Resume (paperpull_core.listing).
         listing.started(self)
@@ -474,6 +482,30 @@ class App:
         try:
             raw = site.usbank_collect_structured(
                 page, keep=scope.period_filter(self.args, self.config))
+            walked = raw
+            passed_over = list(getattr(raw, "passed_over", ()))
+            if not raw:
+                shown = getattr(raw, "shown", 0) or site.download_controls_shown(page)
+                if shown:
+                    # Statements the pickers could not read. The page's text
+                    # holds them too, but a row read from it is not one the
+                    # download can find again, and a tester's Pilot that read
+                    # it made records of chunks of the page (#106).
+                    log.info("U.S. Bank: the pickers read nothing while %d Download control(s) "
+                             "show", shown)
+                    print("\n  U.S. Bank's page shows statements to download, but they could not")
+                    print("  be read from its account and year pickers, so nothing is listed")
+                    print("  this run rather than guess at them from the page's text.")
+                    print("  Run this again in a little while.")
+                    self.write_failure("read the statement list",
+                                       "the pickers read no statement the page shows",
+                                       extra={"listing": {"download_controls": shown}})
+                    raise SystemExit(0)
+                log.info("U.S. Bank: structured pass found nothing - falling back to scraping")
+                print("  Could not read U.S. Bank's document pickers; reading the page instead.")
+                raw = site.usbank_collect(page)
+                log.info("U.S. Bank: collected %d document rows", len(raw))
+                passed_over += [p for p in getattr(raw, "passed_over", ()) if p not in passed_over]
         except site.RowUnread:
             # A heading, a row or a button that would not answer could be
             # any statement, so the list is not whole and the run stops as
@@ -484,35 +516,26 @@ class App:
             print("  Run this again in a little while to read the list whole.")
             self.write_failure("read the statement list", "some of the list would not answer")
             raise SystemExit(0)
-        walked = raw
-        unchosen = getattr(raw, "unchosen", 0)
+        unchosen = getattr(walked, "unchosen", 0)
         if unchosen:
             print(f"  {unchosen} account(s) in U.S. Bank's account picker could not be chosen")
             print("  this run, so their statements were not listed. Run this again in a")
             print("  little while.")
-        if raw:
-            log.info("U.S. Bank: %d document(s) read from the page's own pickers", len(raw))
-        else:
-            shown = getattr(raw, "shown", 0) or site.download_controls_shown(page)
-            if shown:
-                # Statements the pickers could not read. The page's text
-                # holds them too, but a row read from it is not one the
-                # download can find again, and a tester's Pilot that read it
-                # made records of chunks of the page (#106).
-                log.info("U.S. Bank: the pickers read nothing while %d Download control(s) show",
-                         shown)
-                print("\n  U.S. Bank's page shows statements to download, but they could not")
-                print("  be read from its account and year pickers, so nothing is listed")
-                print("  this run rather than guess at them from the page's text.")
-                print("  Run this again in a little while.")
-                self.write_failure("read the statement list",
-                                   "the pickers read no statement the page shows",
-                                   extra={"listing": {"download_controls": shown}})
-                raise SystemExit(0)
-            log.info("U.S. Bank: structured pass found nothing - falling back to scraping")
-            print("  Could not read U.S. Bank's document pickers; reading the page instead.")
-            raw = site.usbank_collect(page)
-            log.info("U.S. Bank: collected %d document rows", len(raw))
+        if walked:
+            log.info("U.S. Bank: %d document(s) read from the page's own pickers", len(walked))
+        if passed_over:
+            # An account or a year the pickers offered and the walk could
+            # not read is a part of the list missing, so the list is not
+            # noted whole, and the run goes on with what it read and stops
+            # at its end rather than finish (#106 review).
+            self._list_cut_short = True
+            log.info("U.S. Bank: the list was not read through the %s", " and the ".join(passed_over))
+            print("\n  U.S. Bank's statement list was not read whole, since its %s"
+                  % " and its ".join(passed_over))
+            print("  could not be read through. What was read is kept, and this run stops")
+            print("  at its end rather than finish. The next run reads the list again.")
+            self.write_failure("read the statement list", "a picker could not be read through",
+                               extra={"listing": {"passed_over": passed_over}})
         n_new = 0
         for d in raw:
             n_new += self._record_usbank_doc(d)
@@ -522,13 +545,17 @@ class App:
 
         self.discovery.save()
         # The whole list is in, and only now may a Resume that carries on
-        # from it call the run finished (paperpull_core.listing).
-        listing.read_whole(self)
+        # from it call the run finished (paperpull_core.listing). A list read
+        # in part is not, and the listing stays one that stopped.
+        if not self._list_cut_short:
+            listing.read_whole(self)
         self.stats["discovered"] = len(self.discovery.data)
 
         if not quiet:
             docs = [Document.from_dict(v) for v in self.discovery.data.values()]
-            print(f"\nDiscovery complete. Documents known: {len(docs)}")
+            print("\nDiscovery %s. Documents known: %d"
+                  % ("read part of the statement list" if self._list_cut_short else "complete",
+                     len(docs)))
             by_cat = {}
             for d in docs:
                 by_cat.setdefault(d.category, []).append(d)
@@ -551,6 +578,8 @@ class App:
                 print(f"  Skipped as out of scope: {self.stats['skipped_out_of_scope']}")
             if retired:
                 print(f"  No longer listed by U.S. Bank, so not tried again: {retired}")
+        if finish:
+            self._stop_if_cut_short()
         return n_new
 
     def _select(self, limit: Optional[int] = None) -> List[Document]:
@@ -772,14 +801,27 @@ class App:
     def cmd_pilot(self):
         self.stats["mode"] = "pilot"
         print("PILOT MODE - limited supervised test run.\n")
-        self.cmd_discover()
+        self.cmd_discover(finish=False)
         docs = self._select(limit=self.config.get("pilot_count", 5))
         if not docs:
             print("\nNo documents in scope to pilot. Run --diagnose.")
+            self._stop_if_cut_short()
             return
         print(f"\nDownloading {len(docs)} document(s)...")
         self.process(docs, dry_run=self.args.dry_run)
         self._pilot_report(docs)
+        self._stop_if_cut_short()
+
+    def _stop_if_cut_short(self) -> None:
+        """A run that did not read the whole statement list did not finish,
+        and must not read as a clean one. Once it has used what came, it
+        leaves on SystemExit the way a run leaves on a sign-out, which the
+        panel reports as a run that stopped."""
+        if self._list_cut_short:
+            print("\nNot all of U.S. Bank's statement list was read, so this run stops here")
+            print("rather than finish. Everything it saved is kept. Run it again later to")
+            print("read the rest.")
+            raise SystemExit(0)
 
     def _pilot_report(self, docs: List[Document]):
         print("\n" + "=" * 70)
@@ -819,10 +861,11 @@ class App:
             if ask("> ").strip().upper() != "YES":
                 print("Aborted. (Run the pilot first if you haven't: --pilot)")
                 return
-        self.cmd_discover()
+        self.cmd_discover(finish=False)
         docs = self._select()
         print(f"\nDownloading {len(docs)} document(s)...")
         self.process(docs, dry_run=self.args.dry_run)
+        self._stop_if_cut_short()
 
     def cmd_resume(self):
         self.stats["mode"] = "resume"

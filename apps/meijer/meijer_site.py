@@ -543,15 +543,27 @@ def collect_both_tabs(page, facts: Optional[dict] = None) -> List[RawCard]:
     changing (settle_rows). A tab can draw its rows a few at a time, and
     read at its first rows, the ones it had not drawn yet were left for a
     later run to find. `facts` names each kind whose rows were there to
-    read as "read"."""
+    read and stopped changing as "read".
+
+    A tab whose rows were still changing when the wait ran out, or that
+    drew more than the collector reads, was not seen whole, as settle_rows
+    says of such a list. Its rows are read all the same, since every one of
+    them is a purchase, but the tab does not count as read, so nothing is
+    said to have dropped off it, and `facts` names it as "unsettled", so
+    the list is not taken as whole (review)."""
     cards: List[RawCard] = []
     seen = set()
     unread = []
+    unsettled = []
     drew = []
     for kind, label in ((IN_STORE, "In-Store Receipts"), (ONLINE, "Online Orders")):
         shown = show_list_for(page, kind, or_none=True)
-        if shown.get("rows") and settle_rows(page, kind)["rows"]:
-            drew.append(kind)
+        if shown.get("rows"):
+            settled = settle_rows(page, kind)
+            if settled["rows"] and settled["settled"]:
+                drew.append(kind)
+            elif settled["rows"]:
+                unsettled.append(label)
         if not (shown.get("rows") or shown.get("none")):
             unread.append(label)
         if not (shown.get("opened") or shown.get("rows")):
@@ -568,6 +580,7 @@ def collect_both_tabs(page, facts: Optional[dict] = None) -> List[RawCard]:
             cards.append(c)
     if facts is not None:
         facts["unread"] = unread
+        facts["unsettled"] = unsettled
         facts["read"] = drew
     return cards
 

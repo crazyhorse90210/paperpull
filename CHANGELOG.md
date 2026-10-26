@@ -203,6 +203,36 @@ All notable changes to PaperPull are recorded here. Versioning follows
   before it, as in `EMPLOYER MEM401K`, counts. A second plan of the type
   at the employer, the employer's combined statement and another
   employer's statement of the type are still set aside.
+- **U.S. Bank never calls its statement list whole with an account or a
+  year left out.** The list is read account by account and year by year
+  through the page's own pickers. An account whose choice did not take, a
+  year the picker would not take or still showed the year before for, and
+  a picker that would not answer or listed none of its accounts or years
+  were each passed over, and the list was still noted as read whole. So
+  Resume could call a run finished with an account or a year never read.
+  Now the run keeps what it read and takes it, says which picker it could
+  not read through, writes a failure file and stops at its end rather than
+  finish, so the next run reads the list again. A list that would not be
+  counted, and rows the page's text reading could not read, stop the list
+  as rows that would not answer always did, and that reading never chooses
+  an option that is turned off or that the guard refuses.
+- **Meijer no longer takes a tab whose rows were still changing for one
+  read whole.** Discovery waits for a tab's rows to stop changing before
+  it reads them. When they were still changing as the wait ran out, it
+  read them all the same, counted the tab as read and noted the order list
+  as whole. Now the purchases read are kept and the run goes on with them,
+  but it says the list was not read whole, writes a failure file and stops
+  at its end rather than finish, so Resume reads the list again. Such a
+  tab never counts toward saying a purchase is no longer listed.
+- **Citi takes no second copy of a statement kept for review, and an
+  empty requested list no longer sets requested statements aside.** A
+  regular statement put aside for review with its file kept was not
+  counted as saved, so once Citi listed its month as a requested statement
+  that came as a second file. And an answer listing no requested
+  statements marked every requested statement not yet saved as No Longer
+  Listed until a later list showed them again. An empty list now sets
+  nothing aside, and a requested statement is still marked No Longer
+  Listed once the last day Citi lists it has passed.
 
 ## [0.58.0] - 2026-10-24
 

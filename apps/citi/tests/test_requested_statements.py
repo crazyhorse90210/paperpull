@@ -508,3 +508,87 @@ def test_redownload_skips_a_saved_requested_statement_past_its_expiry(make_app, 
     assert len(page.pdf_bodies()) == 1
     rec = next(r for r in app.progress.data.values() if r.get("archived_month"))
     assert rec["state"] == State.COMPLETED.value and app.stats["manual_review"] == 0
+
+
+# -- the review of citi-requested ------------------------------------------------
+
+def _put_aside(app, key):
+    """The record of `key` as one put aside for review with its copy kept."""
+    kept = app.paths.manual_review / "kept.pdf"
+    kept.write_bytes(PDF)
+    app.progress.update(key, dict(app.discovery.get(key), state=State.NEEDS_MANUAL_REVIEW.value,
+                                  pdf_path=str(kept)))
+    return kept
+
+
+def test_a_regular_copy_kept_for_review_is_not_taken_again_as_a_requested_one(make_app):
+    """A regular statement was put aside for review with its copy kept, and
+    _already_done counts it as done. The regular list has since dropped it
+    and the holder requested its month. That is the same statement, so it
+    does not come as a second file, and once the review copy is gone the
+    requested one is taken."""
+    first = Page(regular={CARD["accountId"]: _regular("10/22/2020")})
+    app = make_app(first)
+    app.cmd_discover(quiet=True)
+    [key] = list(app.discovery.data)
+    kept = _put_aside(app, key)
+    later = Page(regular={CARD["accountId"]: _regular("09/22/2026")},
+                 requested={CARD["accountId"]: _requested(_entry("202010"), _entry("202003"))})
+    app = make_app(later)
+    app.cmd_run("all")
+    assert set(_by_month(app)) == {"202003"}
+    assert [b["statementDate"] for b in later.pdf_bodies()] == ["09/22/2026", "202003"]
+    assert app.progress.get(key)["state"] == State.NEEDS_MANUAL_REVIEW.value
+
+    kept.unlink()
+    again = Page(regular={CARD["accountId"]: _regular("09/22/2026")},
+                 requested={CARD["accountId"]: _requested(_entry("202010"), _entry("202003"))})
+    app = make_app(again)
+    app.cmd_run("all")
+    assert [b["statementDate"] for b in again.pdf_bodies()] == ["202010"]
+
+
+def test_an_empty_list_never_says_a_requested_statement_is_gone(make_app):
+    """A requested statement is listed, and the next answer carries the
+    start date and no entry. That is how a card with nothing requested
+    answers, and a list emptied while statements were still requested has
+    not been seen, so the statement is not marked No Longer Listed, and the
+    run takes it. The answer is a list read, so the listing is whole."""
+    page = Page(requested={CARD["accountId"]: _requested(_entry("202010"))})
+    make_app(page).cmd_discover(quiet=True)
+    page.requested = {CARD["accountId"]: _requested()}
+    app = make_app(page)
+    app.cmd_discover(quiet=True)
+    [rec] = _by_month(app).values()
+    assert rec["state"] == State.DISCOVERED.value
+    assert listing.last(app) == listing.COMPLETE
+    app = make_app(page)
+    app.cmd_run("all")
+    assert [b["statementDate"] for b in page.pdf_bodies()] == ["202010"]
+
+
+def test_an_empty_list_past_the_expiry_still_marks_it_gone(make_app, monkeypatch):
+    page = Page(requested={CARD["accountId"]: _requested(
+        _entry("202010", expiry="20261020", text="Oct, 20"))})
+    monkeypatch.setattr(citi_docs, "_today", lambda: "2026-10-18")
+    make_app(page).cmd_discover(quiet=True)
+    monkeypatch.setattr(citi_docs, "_today", lambda: "2026-10-21")
+    page.requested = {CARD["accountId"]: _requested()}
+    app = make_app(page)
+    app.cmd_discover(quiet=True)
+    [rec] = [(app.progress.get(k) or r) for k, r in app.discovery.data.items()
+             if r.get("archived_month")]
+    assert rec["state"] == State.NO_LONGER_LISTED.value
+
+
+def test_a_list_that_still_has_entries_still_says_one_is_gone(make_app):
+    """The other side of an empty list. A list read with entries that no
+    longer has a statement it listed before still marks it."""
+    page = Page(requested={CARD["accountId"]: _requested(_entry("202010"), _entry("202012"))})
+    make_app(page).cmd_discover(quiet=True)
+    page.requested = {CARD["accountId"]: _requested(_entry("202012", status="P"))}
+    app = make_app(page)
+    app.cmd_discover(quiet=True)
+    states = {r["archived_month"]: (app.progress.get(k) or r)["state"]
+              for k, r in app.discovery.data.items() if r.get("archived_month")}
+    assert states["202010"] == State.NO_LONGER_LISTED.value
