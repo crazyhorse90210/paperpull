@@ -92,6 +92,14 @@ All notable changes to PaperPull are recorded here. Versioning follows
   whole. Now the run keeps what it read and takes it, writes a failure
   file and stops at its end rather than finish. A year whose list never
   shows is left as it was, since a year with no statement never shows one.
+- **Costco never calls its purchase list whole with a tab or a quarter
+  left out.** Discovery reads the Warehouse and Online tabs and each
+  quarter the Showing picker offers. A tab that would not open and a
+  quarter the picker would not take were passed over, and the list was
+  still noted as read whole, so Resume carried on without reading it
+  again. Now the run goes on with what it read, writes a failure file and
+  stops at its end rather than finish, and Resume reads the list again. A
+  quarter that is turned off is never chosen.
 
 ## [0.58.0] - 2026-10-24
 

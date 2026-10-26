@@ -643,7 +643,10 @@ _MONTHS = ["jan", "feb", "mar", "apr", "may", "jun",
 
 
 def range_options(page) -> List[str]:
-    """Every option in the "Showing" picker, in the order it lists them."""
+    """Every option in the "Showing" picker, in the order it lists them.
+    One that is turned off cannot be chosen, and is not one it offers,
+    since choosing it waited out RANGE_CHOICE_MS and was taken for a
+    quarter that would not take."""
     try:
         sel = page.get_by_role("combobox", name=re.compile("showing", re.I)).first
         if sel.count() == 0:
@@ -651,7 +654,7 @@ def range_options(page) -> List[str]:
         if sel.count() == 0:
             return []
         return [o.strip() for o in
-                sel.locator("option").all_inner_texts()[:60] if o.strip()]
+                sel.locator("option:not([disabled])").all_inner_texts()[:60] if o.strip()]
     except Exception as e:
         log.warning("Could not read the date range options: %s", e)
         return []
@@ -675,6 +678,11 @@ def range_covers(option: str, date: str) -> bool:
     return m.group(1) == year and start <= int(month) <= start + 2
 
 
+# How long the "Showing" picker is given to take a quarter, waited while a
+# picker that is busy is turned off.
+RANGE_CHOICE_MS = 15000
+
+
 def select_range(page, option: str) -> bool:
     """Choose one option in the "Showing" picker and wait for the redraw."""
     try:
@@ -683,7 +691,7 @@ def select_range(page, option: str) -> bool:
             sel = page.locator(FALLBACK["range_select"]).first
         if sel.count() == 0:
             return False
-        sel.select_option(label=option, timeout=15000)
+        sel.select_option(label=option, timeout=RANGE_CHOICE_MS)
     except Exception as e:
         log.warning("Could not choose the range %r: %s", option, e)
         _note("result", "could not choose the range", error=e)
@@ -824,11 +832,19 @@ def fetch_history(page, max_pages: int = 200, year: str = "") -> dict:
 
     Named for what the orchestrator calls. The answer has the shape a
     JSON API would give, so the day a recording brings Costco's own
-    query text back, this is the only function that changes."""
+    query text back, this is the only function that changes.
+
+    A tab that would not open and a quarter the picker offered that would
+    not take were not read, and "passed_over" names them, "tab" and
+    "quarter", where they used to be passed over and the list taken as
+    read whole. Costco draws both tabs whether or not anything is under
+    them, so a tab not there is a page that did not draw."""
     records, seen = [], set()
+    passed_over = set()
     ranges_walked = 0
     for tab in (TAB_WAREHOUSE, TAB_ONLINE):
         if not open_tab(page, tab):
+            passed_over.add("tab")
             continue
         options = ranges_for(page, year)
         # Whatever it opens on first, then each quarter in turn. Without
@@ -836,6 +852,7 @@ def fetch_history(page, max_pages: int = 200, year: str = "") -> dict:
         for option in [None] + options:
             if option is not None:
                 if not select_range(page, option):
+                    passed_over.add("quarter")
                     continue
                 ranges_walked += 1
             for rec in read_rows(page):
@@ -853,7 +870,7 @@ def fetch_history(page, max_pages: int = 200, year: str = "") -> dict:
         log.warning("No purchases were found on either tab. If there are "
                     "purchases on screen, run `record` and send the file.")
     return {"status": 200 if records else 0, "pages": ranges_walked or 1,
-            "last": True, "records": records}
+            "last": True, "records": records, "passed_over": sorted(passed_over)}
 
 
 def _first(d: dict, *names, default=None):

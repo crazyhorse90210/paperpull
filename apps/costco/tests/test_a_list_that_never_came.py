@@ -364,3 +364,105 @@ def test_with_somebody_there_it_asks_them_to_look_and_then_goes_on(attached, tmp
 
     assert len(asked) == 1 and "shows your purchases" in asked[0], asked
     assert len(known(tmp_path)) == 1
+
+
+# -- a list that ends where it never came ------------------------------------------
+#
+# Orders & Purchases came, its tabs drawn, and the run went on to each tab
+# and each quarter in the Showing picker. A tab that would not open and a
+# quarter that could not be chosen were passed over, a page that showed no
+# purchase and never said it had none was taken for an account with none,
+# and either way the list was noted as read whole. Resume then carried on
+# from what it knew without reading the list again.
+
+def noted_whole(tmp_path):
+    """What the last listing noted, True for a list read to its end."""
+    path = tmp_path / "out" / "last-listing.json"
+    return json.loads(path.read_text(encoding="utf-8"))["complete"]
+
+
+def discover(tmp_path, cdp_url, capsys):
+    """Discover, however it ends, and what it printed."""
+    cfg = config_for(tmp_path, cdp_url)
+    try:
+        app_mod.main(["--discover", "--config", str(cfg)])
+    except SystemExit:
+        pass
+    return printed(capsys)
+
+
+# The tabs as they always are, with the Online tab missing.
+WAREHOUSE_TAB_ALONE = LISTED.replace(
+    '<button role="tab" aria-selected="false">Online</button>\n', "")
+
+
+def test_a_tab_that_will_not_open_is_not_read_whole(attached, tmp_path, capsys):
+    """Costco draws both tabs whether or not anything is under them, so a
+    tab that is not there is a page that did not draw."""
+    SITE.orders = WAREHOUSE_TAB_ALONE
+    out = discover(tmp_path, attached, capsys)
+
+    assert noted_whole(tmp_path) is False, out
+    assert len(known(tmp_path)) == 1, "the warehouse receipt read is kept"
+
+
+# The picker lists a quarter, and is busy when it is asked for it.
+A_QUARTER_IT_CANNOT_CHOOSE = LISTED.replace(
+    "</body>", '<select aria-label="Showing" disabled><option>Last 3 Months</option>'
+               "<option>2026 April - June</option></select></body>")
+
+
+def test_a_quarter_that_cannot_be_chosen_is_not_read_whole(attached, tmp_path, capsys,
+                                                          monkeypatch):
+    """The picker is given a moment here, not fifteen seconds."""
+    monkeypatch.setattr(site, "RANGE_CHOICE_MS", 1500, raising=False)
+    SITE.orders = A_QUARTER_IT_CANNOT_CHOOSE
+    out = discover(tmp_path, attached, capsys)
+
+    assert noted_whole(tmp_path) is False, out
+    assert len(known(tmp_path)) == 1
+    assert "Costco's purchase list was not read whole" in out, out
+    [failure] = list((tmp_path / "out" / "Diagnostics").glob("failure-*.json"))
+    report = json.loads(failure.read_text(encoding="utf-8"))
+    assert (report["step"], report["reason"]) == ("read the purchase list",
+                                                  "some of the list could not be chosen")
+
+
+# The picker lists a quarter that is turned off, which may be how it draws
+# a quarter with nothing in it.
+A_QUARTER_TURNED_OFF = LISTED.replace(
+    "</body>", '<select aria-label="Showing"><option>Last 3 Months</option>'
+               "<option disabled>2026 April - June</option></select></body>")
+
+
+def test_a_quarter_turned_off_is_never_chosen_and_the_list_is_whole(attached, tmp_path, capsys,
+                                                                   monkeypatch):
+    chosen = []
+    real = site.select_range
+
+    def choose(page, option):
+        chosen.append(option)
+        return real(page, option)
+    monkeypatch.setattr(site, "select_range", choose)
+    SITE.orders = A_QUARTER_TURNED_OFF
+    out = discover(tmp_path, attached, capsys)
+
+    assert chosen == [], chosen
+    assert noted_whole(tmp_path) is True, out
+
+
+def test_a_pilot_of_a_list_passed_over_stops_at_its_end(attached, tmp_path, capsys, monkeypatch):
+    """It takes what the list read, and stops at its end rather than
+    finish. A Resume after it reads the list again, and stops too."""
+    SITE.orders = WAREHOUSE_TAB_ALONE
+    taken = []
+    monkeypatch.setattr(app_mod.App, "process_purchases",
+                        lambda self, purchases, dry_run=False: taken.extend(purchases))
+    out = stopped_run(tmp_path, attached, capsys, "--pilot")
+
+    assert len(taken) == 1, out
+    assert "Not all of Costco's purchase list was read, so this run stops here" in out, out
+    assert noted_whole(tmp_path) is False, out
+
+    stopped_run(tmp_path, attached, capsys, "--resume")
+    assert noted_whole(tmp_path) is False

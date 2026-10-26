@@ -78,6 +78,10 @@ def ask(prompt: str) -> str:
 class App:
     _journal = None
     _requests = None
+    # Set when discovery passed over a tab or a quarter it could not choose,
+    # so the run goes on with what it read and stops at its end rather than
+    # finish (_stop_if_cut_short).
+    _list_cut_short = False
 
     def __init__(self, args):
         self.args = args
@@ -379,10 +383,16 @@ class App:
             print("anything Costco asks there yourself, then run --login again.")
         self.close()
 
-    def cmd_discover(self, types: Optional[List[str]] = None, quiet: bool = False) -> dict:
+    def cmd_discover(self, types: Optional[List[str]] = None, quiet: bool = False,
+                     finish: bool = True) -> dict:
         """Discovery pass: the purchase-history API, called from inside the
         signed-in page the way the page itself calls it, every page of it
-        until the API says it is the last. Nothing clicked."""
+        until the API says it is the last. Nothing clicked.
+
+        A list read only in part (a tab or a quarter passed over) keeps the
+        purchases it found, and Pilot, Run All and Resume go on with them,
+        but the run stops at its end rather than finish. With finish=False
+        the caller does that once it has used them."""
         # A listing that stops on the way, however it stops, is noted as one
         # that stopped, so Resume reads the list again (paperpull_core.listing).
         listing.started(self)
@@ -406,6 +416,18 @@ class App:
             print("and send the file. That turns the guess into the answer.")
             log.warning("Nothing read from the page. Built without an account, "
                         "so run `record` and share the file.")
+        if hist.get("passed_over"):
+            # A tab that would not open or a quarter the picker offered that
+            # would not take is a part of the list missing. The run goes on
+            # with what it read and stops at its end rather than finish
+            # (_stop_if_cut_short), and Resume reads the list again.
+            self._list_cut_short = True
+            log.info("Purchase list: the %s could not be chosen",
+                     " and the ".join(hist["passed_over"]))
+            print("\n!! Costco's purchase list was not read whole, since a tab or a quarter on")
+            print("it could not be chosen. What was read is kept, and this run stops at its")
+            print("end rather than finish. The next run reads the list again.")
+            self.write_failure("read the purchase list", "some of the list could not be chosen")
         purchases = [pp for pp in (site.record_to_purchase(r) for r in records) if pp]
         for purchase in purchases:
             if types and purchase.purchase_type not in types:
@@ -435,8 +457,10 @@ class App:
                 }, save=False)
         self.discovery.save()
         # The whole list is in, and only now may a Resume carry on from it
-        # without reading it again (paperpull_core.listing).
-        listing.read_whole(self)
+        # without reading it again (paperpull_core.listing). A list read in
+        # part is not, and the listing stays one that stopped.
+        if not self._list_cut_short:
+            listing.read_whole(self)
 
         all_recs = list(self.discovery.data.values())
         self.stats["online_discovered"] = sum(
@@ -445,7 +469,9 @@ class App:
             1 for r in all_recs if r.get("purchase_type") == IN_STORE)
 
         if not quiet:
-            print(f"\nDiscovery complete. Purchases known: {len(all_recs)}")
+            print("\nDiscovery %s. Purchases known: %d"
+                  % ("read part of the purchase list" if self._list_cut_short else "complete",
+                     len(all_recs)))
             by_year = {}
             for r in all_recs:
                 y = (r.get("purchase_date") or "?")[:4]
@@ -455,7 +481,19 @@ class App:
             dates = sorted(r.get("purchase_date") for r in all_recs if r.get("purchase_date"))
             if dates:
                 print(f"  Date range: {dates[0]} .. {dates[-1]}")
+        if finish:
+            self._stop_if_cut_short()
         return {"new": n_new}
+
+    def _stop_if_cut_short(self) -> None:
+        """A run that did not read the whole purchase list did not finish,
+        and must not read as a clean one. Once it has used what came, it
+        leaves on SystemExit the way a run leaves on a sign-out, which the
+        panel reports as stopped after Pilot, Run All and Resume."""
+        if self._list_cut_short:
+            print("\nNot all of Costco's purchase list was read, so this run stops here rather")
+            print("than finish. Run it again later to read the rest.")
+            raise SystemExit(0)
 
     # -- selection ----------------------------------------------------------
 
@@ -999,17 +1037,19 @@ class App:
     def cmd_pilot(self):
         self.stats["mode"] = "pilot"
         print("PILOT MODE - limited supervised test run.")
-        self.cmd_discover(types=[ONLINE, IN_STORE], quiet=False)
+        self.cmd_discover(types=[ONLINE, IN_STORE], quiet=False, finish=False)
         selected: List[Purchase] = self._select_purchases(
             ONLINE, limit=self.config["pilot_online"])
         selected += self._select_purchases(
             IN_STORE, limit=self.config["pilot_instore"])
         if not selected:
             print("\nNo purchases discovered to pilot. Run --diagnose to inspect pages.")
+            self._stop_if_cut_short()
             return
         print(f"\nProcessing {len(selected)} pilot purchase(s)...")
         self.process_purchases(selected, dry_run=self.args.dry_run)
         self._pilot_report(selected)
+        self._stop_if_cut_short()
 
     def _pilot_report(self, selected: List[Purchase]):
         print("\n" + "=" * 70)
@@ -1060,12 +1100,13 @@ class App:
             if ask("> ").strip().upper() != "YES":
                 print("Aborted. (Run the pilot first if you haven't: --pilot)")
                 return
-        self.cmd_discover(types=types, quiet=False)
+        self.cmd_discover(types=types, quiet=False, finish=False)
         selected: List[Purchase] = []
         for t in types:
             selected += self._select_purchases(t)
         print(f"\nProcessing {len(selected)} purchase(s)...")
         self.process_purchases(selected, dry_run=self.args.dry_run)
+        self._stop_if_cut_short()
 
     def cmd_resume(self):
         self.stats["mode"] = "resume"
@@ -1073,9 +1114,10 @@ class App:
         # stopped before the list was read whole, that is some of them or none,
         # and Resume finished clean with the rest never looked for. So the list
         # is read before anything else, and a listing that stops again stops
-        # the run (paperpull_core.listing).
+        # the run (paperpull_core.listing). A list read again only in part
+        # still goes on with what it found, and the run stops at its end.
         if listing.read_again_first(self):
-            self.cmd_discover(quiet=True)
+            self.cmd_discover(quiet=True, finish=False)
         # Only the purchases inside the run's scope, chosen as Pilot and Run
         # All choose them, so a Resume with a year chosen takes that year
         # alone. The limit waits until the done ones are left out.
@@ -1089,9 +1131,11 @@ class App:
             print("Nothing to resume - everything in scope is complete."
                   if listing.scoped(self) else
                   "Nothing to resume - all discovered purchases are complete.")
+            self._stop_if_cut_short()
             return
         print(f"Resuming: {len(pend)} incomplete purchase(s).")
         self.process_purchases(pend, dry_run=self.args.dry_run)
+        self._stop_if_cut_short()
 
 
     def cmd_rename(self):
