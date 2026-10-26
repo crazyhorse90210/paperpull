@@ -64,6 +64,10 @@ services:
       # reach it by any other name, a VPN's or a reverse proxy's, list the
       # names here, separated by commas.
       # PAPERPULL_HOSTS: "paperpull.example.com"
+      # 1 makes the panel answer only to the names and addresses listed in
+      # PAPERPULL_HOSTS, and no longer to this machine's address or a home
+      # network name unless they are listed there too.
+      # PAPERPULL_HOSTS_ONLY: "1"
       # With Paperless, 1 puts each provider's documents in a folder of the
       # provider's name inside the consume folder, which Paperless turns into
       # a tag when PAPERLESS_CONSUMER_SUBDIRS_AS_TAGS is on there.

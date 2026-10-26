@@ -26,6 +26,16 @@ All notable changes to PaperPull are recorded here. Versioning follows
   not answer the way the recordings showed stops the run with a failure
   file of counts rather than a guess. Login says you are signed in only
   when the statements list answered. Tax forms are not covered yet.
+- **PaperPull Server can answer only to the names you list.** By default
+  the panel answers to the server's address, to a name without a dot such
+  as `nas`, to a name ending in a home network suffix such as `.local`, and
+  to the names in `PAPERPULL_HOSTS`. With `PAPERPULL_HOSTS_ONLY` set to `1`
+  it answers only to the names and addresses in `PAPERPULL_HOSTS`, an
+  address matched however it is written, and to the container's own
+  loopback, which the self-test uses. A refused name gets a page saying the
+  setting is on and where to add the name, and when nothing is listed the
+  container's log says so at start and the self-test's network row fails.
+  Plain HTTP and the default names are unchanged.
 
 ### Fixed
 - **Wells Fargo, SBA and American Family read a document's button drawn as

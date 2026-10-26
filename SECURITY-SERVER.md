@@ -55,8 +55,10 @@ See "Design safety" in [SECURITY.md](SECURITY.md).
   address, a home network name such as `nas` or `nas.local` and the names
   you list in `PAPERPULL_HOSTS`, see step 4 in [SERVER.md](SERVER.md), so a
   website cannot reach it through your browser by pointing a name of its
-  own at your server. And no other site may show the panel inside a page
-  of its own.
+  own at your server. With `PAPERPULL_HOSTS_ONLY` set to `1` it answers
+  only to what `PAPERPULL_HOSTS` lists, and to the container's own
+  loopback. And no other site may show the panel inside a page of its
+  own.
 - **Its answers stay where they were sent.** Every answer tells the
   browser to take it for exactly the kind of file it says it is, never a
   script or a page because of what is in it. Every answer but the icon,

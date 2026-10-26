@@ -75,6 +75,9 @@ services:
       # The names in x-names above, which the panel answers to besides its
       # address.
       PAPERPULL_HOSTS: *names
+      # 1 makes the panel answer only to the names in x-names, and no longer
+      # to the address in x-address unless it is in x-names too.
+      # PAPERPULL_HOSTS_ONLY: "1"
       # Every request comes from Caddy, which says which browser sent it, so
       # that wrong passwords count against that browser and not Caddy.
       PAPERPULL_PROXY: proxy
