@@ -1,8 +1,10 @@
 """Bank of America's site. When the site changes, repair this file only.
 
 STATUS, built 2026-10-25 from two recordings by the tester on #121, one trip
-to a checking statement and one to a credit card statement, and NOT RUN on
-an account yet. Every part below that a recording could not show is found
+to a checking statement and one to a credit card statement. Its first run
+on an account (2026-10-26) listed 388 statements of five accounts and saved
+none, for want of the Statements heading below, so NOT YET PROVEN on an
+account. Every part below that a recording could not show is found
 on the page at run time, and anything that does not fit what the
 recordings showed stops the run rather than being guessed at.
 
@@ -30,14 +32,25 @@ HOW THE STATEMENTS PAGE WORKS, as the recordings showed it
   The recordings write every word off the page as its shape, so the three
   words of the list's address, the account key's name and the PDF link's
   address are not in them. So the app learns them from the page itself.
-  It reloads the statements page the person left open, a navigation and
-  never a press, keeps the list call the page makes (its address, the
-  body's names and the headers it sent), and reads the PDF links the page
-  draws. A link's address is learned as a form, the address with each of
-  its row's own values in it marked, and is taken only when every link the
-  page drew comes out of the same form. Each other statement's PDF is asked
-  for at its own row's address in that form, from inside the page with the
-  page's own session.
+  It reloads the statements page the person left open, keeps the list call
+  the page makes (its address, the body's names and the headers it sent),
+  and reads the PDF links the page draws. A link's address is learned as a
+  form, the address with each of its row's own values in it marked, and is
+  taken only when every link the page drew comes out of the same form, from
+  the rows of every list the page answered while it was heard. Each other
+  statement's PDF is asked for at its own row's address in that form, from
+  inside the page with the page's own session.
+
+  The page draws its list under a heading of each category, and a reload
+  leaves the Statements heading shut, with no row and so no link drawn
+  under it (the first real run on #121, 2026-10-26). Both recordings
+  pressed that heading first, and the page asked its list again and drew
+  the rows. So when a statement is to be downloaded and no Download PDF
+  link shows after the reload, the one button whose whole name is
+  Statements and which says it is shut is pressed, once. The list it asks
+  for is waited for, and the links are matched to the newest answer's rows
+  first, the ones they were drawn from. Login and Discover only list, and
+  press nothing.
 
   IDENTITY is the account, the date and the title, with the docId as a
   hint (paperpull_core.keys.told_apart numbers two of one day and one
@@ -47,12 +60,16 @@ HOW THE STATEMENTS PAGE WORKS, as the recordings showed it
 
 SAFETY. A bank, with checking, savings, credit cards, Zelle, transfers
 and bill pay.
-  Strictly READ-ONLY, and nothing is pressed at all. No function here
-  clicks, types, selects, submits a form or confirms a dialog. The page is
-  reloaded to hear its list call, at the start of a run and again when what
-  was heard is FRESH_SECONDS old, and lists and PDFs are asked for
-  from inside the signed-in page, every address on bankofamerica.com. The
-  guard below is what Record and Diagnose mark each control against.
+  Strictly READ-ONLY. The one press is the Statements heading of the
+  statements page, when it is shut, the page shows no Download PDF link
+  and a statement is to be downloaded (or Diagnose surveys the page),
+  through is_statements_heading (the guard below plus its whole name) and
+  paperpull_core.pressing, which stops the run when anything is over it.
+  Nothing else is clicked, typed, selected, submitted or confirmed. The page
+  is reloaded to hear its list call, at the start of a run and again when
+  what was heard is FRESH_SECONDS old, and lists and PDFs are asked for from
+  inside the signed-in page, every address on bankofamerica.com. The guard
+  below is also what Record and Diagnose mark each control against.
 """
 from __future__ import annotations
 
@@ -62,8 +79,8 @@ import time
 from typing import List, Optional, Tuple
 from urllib.parse import quote, urlsplit
 
-from paperpull_core import intake
-from paperpull_core.controls import SETTINGS_CONTROL_RE, AUTH_CONTROL_RE
+from paperpull_core import intake, pressing
+from paperpull_core.controls import SETTINGS_CONTROL_RE, AUTH_CONTROL_RE, control_labels
 from paperpull_core.characters import whole_json
 from paperpull_core.dates import checked as _checked_date, full_year
 # Everything on its way into a diagnostic file goes through here.
@@ -98,6 +115,11 @@ CHANGING_PATH_RE = re.compile(r"delete|remove|update|save|edit|change|create|sen
 BODY_NAMES = ("docCategoryId", "year", "lang")
 # A statement's PDF link, by the words of its name.
 DOWNLOAD_LINK_RE = re.compile(r"^\s*Download PDF for\b", re.I)
+# The heading the Statements list is drawn under, by its whole name, as
+# both recordings pressed it.
+STATEMENTS_HEADING = "Statements"
+# How long the rows under it may take to draw once it is opened.
+OPEN_WAIT_MS = 15000
 # The statements category, by its name in documentCategoryList.
 STATEMENTS_CATEGORY_RE = re.compile(r"^\s*statements?\s*$", re.I)
 # A docId shorter than this could sit inside an address by chance.
@@ -126,7 +148,15 @@ class NotThere(RuntimeError):
 
 class NotLearned(RuntimeError):
     """What the statements page does did not fit what the recordings
-    showed, so nothing was guessed. The message is fixed words only."""
+    showed, so nothing was guessed. The message is fixed words only, and
+    `facts` what the page drew, as counts and fixed words, and `reason` the
+    same in the failure file's own words, since its reason keeps no capital
+    letter and no word off the word list."""
+
+    def __init__(self, message: str, facts: Optional[dict] = None, reason: str = ""):
+        super().__init__(message)
+        self.facts = dict(facts or {})
+        self.reason = reason
 
 
 class ListCut(RuntimeError):
@@ -207,6 +237,25 @@ def is_safe_control(name: str) -> bool:
     return bool(SAFE_DOC_CONTROL_RE.search(name))
 
 
+def is_statements_heading(name: str) -> bool:
+    """The Statements heading of the statements page, by its whole name,
+    and only when the guard above lets it through too."""
+    name = re.sub(r"\s+", " ", name or "").strip()
+    return name == STATEMENTS_HEADING and is_safe_control(name)
+
+
+# The only controls a run presses, each through its own guard.
+PRESS_GUARDS = (is_statements_heading,)
+
+
+def _words():
+    """This app's own words for paperpull_core.words, for saying what
+    covered a control."""
+    import sys
+    from paperpull_core.words import words_for
+    return words_for("Bank of America", sys.modules[__name__])
+
+
 SECURITY_CHALLENGE_MARKERS = [
     "one-time code", "one time code", "enter the code", "verification code",
     "we sent a code", "authorization code", "authenticator",
@@ -284,13 +333,22 @@ def open_home(page) -> bool:
         return False
 
 
+def is_statements_address(url: str) -> bool:
+    """Whether an address is Statements & Documents', by the address alone,
+    so a tab can be told by it without reading the tab."""
+    try:
+        return _on_secure(url) and bool(STATEMENTS_PAGE_RE.search(urlsplit(url).path or ""))
+    except ValueError:
+        return False
+
+
 def on_statements_page(page) -> bool:
     """The tab is on Statements & Documents and shows no sign-in form."""
     try:
         url = page.url or ""
     except Exception:
         return False
-    if not _on_secure(url) or not STATEMENTS_PAGE_RE.search(urlsplit(url).path or ""):
+    if not is_statements_address(url):
         return False
     return not looks_signed_out(page)
 
@@ -351,7 +409,8 @@ class Call:
     and never written anywhere. `account_key` is the name the body and the
     lists give an account by."""
 
-    def __init__(self, url, headers, body, account_key, answer, template, links, link_host=""):
+    def __init__(self, url, headers, body, account_key, answer, template, links, link_host="",
+                 facts=None):
         self.url = url
         self.headers = headers
         self.body = body
@@ -360,6 +419,12 @@ class Call:
         self.template = template
         self.links = links
         self.link_host = link_host       # the host the page's own PDF links were on
+        # What the page drew and answered while it was heard, as counts and
+        # fixed words (link_facts), for Diagnose and a failure file.
+        self.facts = dict(facts or {})
+        # Whether the PDF form was looked for, the Statements heading opened
+        # when it was shut, which a run that only lists does not do.
+        self.form_tried = False
         # What the page's own answer said of itself, which every other
         # answer has to say too (_post_list).
         self.status = answer.get("status")
@@ -372,16 +437,21 @@ class Call:
 
     @property
     def statements_category(self) -> str:
-        for c in self.answer.get("documentCategoryList") or []:
-            if (isinstance(c, dict) and STATEMENTS_CATEGORY_RE.match(str(c.get("docCategoryName") or ""))
-                    and str(c.get("docCategoryId") or "")):
-                return str(c["docCategoryId"])
-        return ""
+        return statements_category_of(self.answer)
 
     @property
     def years(self) -> list:
         return [y for y in (str(v).strip() for v in self.answer.get("yearList") or [])
                 if re.fullmatch(r"\d{4}", y)]
+
+
+def statements_category_of(answer: dict) -> str:
+    """The Statements category's id in a list answer, or ""."""
+    for c in answer.get("documentCategoryList") or []:
+        if (isinstance(c, dict) and STATEMENTS_CATEGORY_RE.match(str(c.get("docCategoryName") or ""))
+                and str(c.get("docCategoryId") or "")):
+            return str(c["docCategoryId"])
+    return ""
 
 
 def _is_list_call(request) -> bool:
@@ -427,15 +497,21 @@ def account_key_of(body: dict, answer: dict) -> str:
     return k
 
 
+# Each "Download PDF for ..." link, its address as the browser reads it, the
+# address as the page wrote it, and the values of its data- fields, which
+# only link_facts reads, to count the links whose statement's id is there.
 _LINKS_JS = r"""() => Array.from(document.querySelectorAll('a[href]')).map(a => ({
   name: ((a.getAttribute('aria-label') || a.innerText || '').replace(/\s+/g, ' ').trim()).slice(0, 300),
-  href: String(a.href || '').slice(0, 2000)
+  href: String(a.href || '').slice(0, 2000),
+  raw: String(a.getAttribute('href') || '').slice(0, 2000),
+  data: Array.from(a.attributes).filter(x => x.name.indexOf('data-') === 0)
+    .map(x => String(x.value || '').slice(0, 300)).slice(0, 12)
 })).filter(x => /^\s*Download PDF for\b/i.test(x.name)).slice(0, 200)"""
 
 
-def download_links(page) -> list:
-    """The address of each "Download PDF for ..." link the page drew, on
-    bankofamerica.com only. Read, never pressed."""
+def drawn_links(page) -> list:
+    """Each "Download PDF for ..." link the page drew, wherever its address
+    goes, as {name, href, raw, data}. Read, never pressed."""
     try:
         # The page's own links, at most two hundred of them, read in the
         # page. No answer's body is read here.
@@ -443,8 +519,132 @@ def download_links(page) -> list:
     except Exception as e:
         log.info("the PDF links could not be read: %s", type(e).__name__)
         return []
-    return [x["href"] for x in got or [] if isinstance(x, dict)
-            and DOWNLOAD_LINK_RE.match(str(x.get("name") or "")) and is_safe_url(str(x.get("href") or ""))]
+    return [x for x in got or [] if isinstance(x, dict)
+            and DOWNLOAD_LINK_RE.match(str(x.get("name") or ""))]
+
+
+def download_links(page) -> list:
+    """The address of each "Download PDF for ..." link the page drew, on
+    bankofamerica.com only. Read, never pressed."""
+    return [str(x.get("href") or "") for x in drawn_links(page)
+            if is_safe_url(str(x.get("href") or ""))]
+
+
+def link_facts(drawn: list, rows: list) -> dict:
+    """What the page's Download PDF links were, as counts and never an
+    address or a value, under names the word list that writes a survey
+    keeps whole. How many there were, where their addresses go, how many
+    hold a listed statement's id whole, and how many hold one only in a
+    data- field, which is where a page keeps what a script of its own opens
+    the PDF with."""
+    ids = {r["docId"] for r in rows if isinstance(r, dict) and isinstance(r.get("docId"), str)
+           and len(r["docId"]) >= MIN_ID}
+
+    def holds(text) -> bool:
+        text = str(text or "")
+        return any(_whole(i).search(text) or _whole(quote(i, safe="")).search(text) for i in ids)
+
+    out = {"pdf_links": len(drawn), "links_to_other_pages": 0, "links_to_no_page": 0,
+           "links_to_this_page": 0, "links_elsewhere": 0, "links_with_an_id": 0,
+           "links_with_an_id_elsewhere": 0}
+    for x in drawn:
+        href = str(x.get("href") or "")
+        raw = str(x.get("raw") if x.get("raw") is not None else href).strip()
+        if raw.lower().startswith("javascript:"):
+            out["links_to_no_page"] += 1
+        elif not raw or raw.startswith("#"):
+            out["links_to_this_page"] += 1
+        elif is_safe_url(href):
+            out["links_to_other_pages"] += 1
+        else:
+            out["links_elsewhere"] += 1
+        if holds(href):
+            out["links_with_an_id"] += 1
+        elif any(holds(v) for v in x.get("data") or []):
+            out["links_with_an_id_elsewhere"] += 1
+    return out
+
+
+def _headings(page, expanded: bool):
+    """The buttons whose whole name is Statements and which say they are
+    open, or shut, as a Playwright locator. A button that says neither,
+    with no aria-expanded at all, is in neither."""
+    return page.get_by_role("button", name=STATEMENTS_HEADING, exact=True, expanded=expanded)
+
+
+def _opens_a_list(el) -> bool:
+    """A heading names the list it opens, in aria-controls."""
+    try:
+        return bool((el.get_attribute("aria-controls") or "").strip())
+    except Exception:
+        return False
+
+
+def _any_refuses(labels) -> bool:
+    """A label any of the blocklists refuses, which is_safe_control asks
+    of a control's name."""
+    return any(FORBIDDEN_CONTROL_RE.search(x) or SETTINGS_CONTROL_RE.search(x)
+               or AUTH_CONTROL_RE.search(x) for x in labels)
+
+
+def _open_ones(page) -> int:
+    """How many Statements headings say they are open and name a list."""
+    loc = _headings(page, True)
+    n = loc.count()
+    return sum(1 for i in range(min(n, 6)) if _opens_a_list(loc.nth(i).element_handle(timeout=5000)))
+
+
+def open_statements(page) -> str:
+    """Open the Statements heading when it is shut, with one press, and say
+    how it stood, in words the failure file keeps. "already expanded" or
+    "opened", or, with nothing pressed, "not found", "several" or
+    "refused". Raises NotThere when the tab has left the statements page,
+    and pressing.Stop when something is over the heading."""
+    try:
+        if _open_ones(page):
+            return "already expanded"
+        shut = _headings(page, False)
+        n = shut.count()
+    except Exception as e:
+        log.info("the Statements heading could not be read: %s", type(e).__name__)
+        return "not found"
+    if n == 0:
+        return "not found"
+    if n > 1:
+        # Which one holds the list cannot be told, so none is pressed.
+        return "several"
+    try:
+        el = shut.first.element_handle(timeout=5000)
+        labels = control_labels(el)
+    except Exception as e:
+        log.info("the Statements heading could not be read: %s", type(e).__name__)
+        return "not found"
+    # Its words, each label it carries, and the list it says it opens.
+    if (el is None or not _opens_a_list(el) or not labels
+            or not any(is_statements_heading(x) for x in labels) or _any_refuses(labels)):
+        return "refused"
+    # Read once more right before the press. A heading the page has opened
+    # meanwhile would be shut by it, and a tab gone from the page is not
+    # pressed in at all.
+    try:
+        still_shut = (el.get_attribute("aria-expanded") or "").strip().lower() == "false"
+    except Exception:
+        still_shut = False
+    if not still_shut:
+        return "already expanded"
+    if not on_statements_page(page):
+        raise NotThere("the tab left Statements & Documents")
+    pressing.click(page, el, css="button[aria-controls]", what="the Statements heading",
+                   words=_words(), step="expand the statements heading")
+    return "opened"
+
+
+def _expanded_now(page) -> bool:
+    """Whether a Statements heading says it is open, read after the press."""
+    try:
+        return _open_ones(page) > 0
+    except Exception:
+        return False
 
 
 def _marker(name: str, quoted: bool) -> str:
@@ -507,10 +707,10 @@ def fill(template: str, row: dict) -> Optional[str]:
         return None
 
 
-def learn_template(rows: list, links: list) -> Tuple[Optional[str], int]:
-    """The one form every link the page drew comes out of, and how many
-    links it was learned from. None when no link holds a row's docId, or
-    when two links come out of different forms."""
+def forms_of(rows: list, links: list) -> Tuple[set, int]:
+    """Every form the links come out of, each learned from a link and the
+    first row, in the order given, whose docId it holds and whose form
+    fills back to it, and how many links gave one."""
     forms = set()
     matched = 0
     for href in links:
@@ -522,27 +722,75 @@ def learn_template(rows: list, links: list) -> Tuple[Optional[str], int]:
                 forms.add(t)
                 matched += 1
                 break
-    if len(forms) != 1:
+    return forms, matched
+
+
+def learn_template(rows: list, links: list) -> Tuple[Optional[str], int]:
+    """The one form every link the page drew comes out of, and how many
+    links it was learned from. None when no link holds a row's docId, when
+    two links come out of different forms, or when a link matches no row."""
+    forms, matched = forms_of(rows, links)
+    if len(forms) != 1 or matched != len(links):
         return None, matched
     return forms.pop(), matched
 
 
-def learn(page, wait_ms: int = 25000) -> Call:
+def _wait_for_links(page, tries: int) -> list:
+    """The page's Download PDF links, once it has drawn any, read every
+    half second for `tries` times. The page draws its rows after its
+    answer comes."""
+    drawn = []
+    for _ in range(tries):
+        drawn = drawn_links(page)
+        if drawn:
+            break
+        page.wait_for_timeout(500)
+    return drawn
+
+
+def _wait_after_the_press(page, got: dict, heard: list, before: int) -> list:
+    """The Download PDF links drawn under the heading just opened, read
+    once the list the press asked for has been heard too, or once
+    OPEN_WAIT_MS is over, whichever comes first. The rows are drawn from
+    that answer, so links read before it is heard could match no row."""
+    drawn = []
+    for _ in range(OPEN_WAIT_MS // 500):
+        if got.get("refused_later"):
+            break
+        drawn = drawn_links(page)
+        if drawn and len(heard) > before:
+            break
+        page.wait_for_timeout(500)
+    return drawn
+
+
+def learn(page, wait_ms: int = 25000, form: bool = True) -> Call:
     """Reload the statements page and keep the list call it makes, and the
-    form of its PDF links. Raises NotThere, SessionExpired or NotLearned."""
+    form of its PDF links, opening the Statements heading first when the
+    page drew none. With `form` False, for a run that only lists (Login,
+    Discover), the links the page drew are read once and nothing is
+    pressed. Raises NotThere, SessionExpired or NotLearned, and
+    pressing.Stop when the heading has something over it."""
     if not on_statements_page(page):
         raise NotThere("the tab is not on Statements & Documents")
     got = {}
+    # Every list the page answers while it is heard, the reload's and the
+    # one opening the heading asks for, whose rows are the ones it draws.
+    heard = []
 
     def on_response(r):
-        if "answer" in got:
-            return
         try:
             req = r.request
             if not _is_list_call(req):
                 return
             body = whole_json(intake.json_of(r))
         except Exception:
+            return
+        if "answer" in got:
+            if r.status in (401, 403):
+                got["refused_later"] = r.status
+            elif r.status == 200 and _is_list_answer(body):
+                heard.append(body)
             return
         got["status"] = r.status
         if not _is_list_answer(body):
@@ -559,6 +807,7 @@ def learn(page, wait_ms: int = 25000) -> Call:
         got["body"] = sent if isinstance(sent, dict) else None
         got["headers"] = {k: v for k, v in (headers or {}).items() if not _BROWSER_HEADERS.match(k)}
         got["answer"] = body
+        heard.append(body)
 
     page.on("response", on_response)
     try:
@@ -570,51 +819,100 @@ def learn(page, wait_ms: int = 25000) -> Call:
         while "answer" not in got and waited < wait_ms:
             page.wait_for_timeout(500)
             waited += 500
+        if got.get("status") in (401, 403) or looks_signed_out(page):
+            raise SessionExpired("Bank of America showed a sign-in page")
+        if "answer" not in got:
+            raise NotLearned("the statements page made no list call this app knows")
+        if not got.get("body"):
+            raise NotLearned("the list call's body was not one this app can read")
+        key = account_key_of(got["body"], got["answer"])
+        if not key:
+            raise NotLearned("the list call names its account in a way this app cannot tell")
+        if any(not (isinstance(a, dict) and isinstance(a.get(key), str) and a.get(key))
+               for a in got["answer"].get("accountList") or []):
+            # An account it could not ask for would be missing from a list
+            # taken as whole.
+            raise NotLearned("an account in the list has no key this app can read")
+        if got["answer"].get("errorInfo"):
+            raise NotLearned("the page's own list answered with an error")
+        if not statements_category_of(got["answer"]):
+            raise NotLearned("the list names no Statements category")
+        heading = "not pressed"
+        pressed = {}
+        # The page draws its rows after its answer comes.
+        drawn = _wait_for_links(page, 16 if form else 1)
+        if not drawn and form:
+            # A reload leaves the Statements heading shut, and nothing is
+            # drawn under a shut heading.
+            before = len(heard)
+            heading = open_statements(page)
+            if heading == "opened":
+                drawn = _wait_after_the_press(page, got, heard, before)
+                if got.get("refused_later"):
+                    raise SessionExpired("Bank of America answered %s" % got["refused_later"])
+                pressed = {"list_read_after_the_heading": len(heard) > before,
+                           "heading_expanded_after": _expanded_now(page)}
     finally:
         try:
             page.remove_listener("response", on_response)
         except Exception:
             pass
-    if got.get("status") in (401, 403) or looks_signed_out(page):
-        raise SessionExpired("Bank of America showed a sign-in page")
-    if "answer" not in got:
-        raise NotLearned("the statements page made no list call this app knows")
-    if not got.get("body"):
-        raise NotLearned("the list call's body was not one this app can read")
-    key = account_key_of(got["body"], got["answer"])
-    if not key:
-        raise NotLearned("the list call names its account in a way this app cannot tell")
-    if any(not (isinstance(a, dict) and isinstance(a.get(key), str) and a.get(key))
-           for a in got["answer"].get("accountList") or []):
-        # An account it could not ask for would be missing from a list
-        # taken as whole.
-        raise NotLearned("an account in the list has no key this app can read")
-    if got["answer"].get("errorInfo"):
-        raise NotLearned("the page's own list answered with an error")
-    # The page draws its rows after its answer comes.
-    links = []
-    for _ in range(16):
-        links = download_links(page)
-        if links:
-            break
-        page.wait_for_timeout(500)
-    template, _matched = learn_template(got["answer"].get("documentList") or [], links)
+    # The newest answer first, the one whose rows the page drew last, so a
+    # statement both answers list is matched to the row it was drawn from.
+    rows = [r for answer in reversed(heard) for r in answer.get("documentList") or []
+            if isinstance(r, dict)]
+    links = [str(x.get("href") or "") for x in drawn if is_safe_url(str(x.get("href") or ""))]
+    forms, matched = forms_of(rows, links)
+    # Every link comes out of the one form, or none is taken.
+    template = next(iter(forms)) if len(forms) == 1 and matched == len(links) else None
     hosts = {(urlsplit(h).hostname or "").lower() for h in links}
+    facts = dict(link_facts(drawn, rows), statements_heading=heading,
+                 times_the_list_was_read=len(heard), rows_read=len(rows), forms=len(forms),
+                 links_with_no_row=len(links) - matched, **pressed)
     call = Call(got["url"], got["headers"], got["body"], key, got["answer"], template, len(links),
-                link_host=hosts.pop() if len(hosts) == 1 else "")
+                link_host=hosts.pop() if len(hosts) == 1 else "", facts=facts)
     if call.template is not None and not call.link_host:
         call.template = None
-    if not call.statements_category:
-        raise NotLearned("the list names no Statements category")
+    # Asked once a run that downloads needs it, unless this one found it.
+    call.form_tried = form or call.template is not None
     _learned.update(at=time.monotonic(), call=call)
     return call
 
 
-def learned(page) -> Call:
-    """The list call heard in this run, heard again when it is old."""
+def not_learned_why(facts: dict) -> Tuple[str, str]:
+    """Why no PDF form was learned, from what the page drew, as a sentence
+    for the run to say and a reason in the failure file's own words."""
+    heading = facts.get("statements_heading")
+    if not facts.get("pdf_links"):
+        if heading in ("opened", "already expanded"):
+            return ("the statements page drew no Download PDF link, even with its "
+                    "Statements heading open", "no pdf link with the heading expanded")
+        return ("the statements page drew no Download PDF link, and its Statements "
+                "heading could not be opened (%s)" % (heading or "not pressed"),
+                "no pdf link on the page")
+    if not facts.get("forms"):
+        if heading == "opened" and not facts.get("list_read_after_the_heading"):
+            return ("the statements page drew Download PDF links for a list this app "
+                    "did not hear it ask for", "the list was not read after the heading")
+        return ("the statements page's Download PDF links do not show the address of "
+                "their statement", "no statement id in the pdf links")
+    if facts["forms"] > 1:
+        return ("the statements page's Download PDF links do not all come out of one form",
+                "the pdf links are of several forms")
+    if facts.get("links_with_no_row"):
+        return ("a Download PDF link on the statements page matches no statement it listed",
+                "pdf links with no row")
+    return ("the statements page's Download PDF links are not all on one host of the bank",
+            "the pdf links are elsewhere")
+
+
+def learned(page, form: bool = False) -> Call:
+    """The list call heard in this run, heard again when it is old, or when
+    `form` is asked for and the call was heard without it."""
     call = _learned.get("call")
-    if call is None or time.monotonic() - _learned["at"] > FRESH_SECONDS:
-        call = learn(page)
+    if (call is None or time.monotonic() - _learned["at"] > FRESH_SECONDS
+            or (form and not call.form_tried)):
+        call = learn(page, form=form)
     return call
 
 
@@ -748,8 +1046,8 @@ def collect_documents(page, keep=None, config: Optional[dict] = None) -> List[di
     predicate over year labels. The years asked for an account are the
     page's own and every year an answer for that account names. Raises
     NotThere, SessionExpired, NotLearned or ListCut, and never answers with
-    part of a list."""
-    call = learn(page)
+    part of a list. Nothing is pressed, since a list needs no PDF link."""
+    call = learn(page, form=False)
     if not call.accounts:
         raise NotLearned("the list names no account")
     if not call.years:
@@ -802,9 +1100,10 @@ def document_bytes(page, *, account_ref: str, date: str, document_id: str,
     the page's links came out of, and the day in the file name the bank
     gave it ("" when it gave none). (None, "") when its row is no longer
     listed. Raises NotThere, SessionExpired or NotLearned."""
-    call = learned(page)
+    call = learned(page, form=True)
     if call.template is None:
-        raise NotLearned("the statements page drew no Download PDF link this app could read")
+        why, reason = not_learned_why(call.facts)
+        raise NotLearned(why, call.facts, reason)
     if not (account_ref and document_id and date):
         return None, ""
     row = fresh_row(page, call, account_ref, year or date[:4], document_id)
@@ -829,8 +1128,9 @@ def document_bytes(page, *, account_ref: str, date: str, document_id: str,
 
 # ---------------------------------------------------------------------------
 # Diagnose survey. Read-only and on the page the person left open. Nothing
-# is followed, pressed or downloaded, no screenshot is taken, and every word
-# goes through the redactor and then the word list that writes the file.
+# is followed or downloaded, the one press is the Statements heading when it
+# is shut, no screenshot is taken, and every word goes through the redactor
+# and then the word list that writes the file.
 # ---------------------------------------------------------------------------
 def _page_summary(page) -> dict:
     out = {"url": "", "title": ""}
@@ -896,14 +1196,15 @@ def learned_summary(call: Call) -> dict:
             "statements_category": bool(call.statements_category),
             "rows_on_the_page": len(rows), "row_fields": fields,
             "body_names": sorted(call.body), "headers_kept": len(call.headers),
-            "pdf_links": call.links, "pdf_form_learned": call.template is not None,
-            "pdf_form_fields": form_fields}
+            "pdf_form_learned": call.template is not None,
+            "pdf_form_fields": form_fields, **call.facts}
 
 
 def survey(page, dwell_ms: int = 2000) -> dict:
     """What the page the person left open looks like, and on the statements
-    page what its list call answers, without pressing or downloading
-    anything. The page is reloaded once to hear the call."""
+    page what its list call answers, downloading nothing. The page is
+    reloaded once to hear the call, and its Statements heading opened when
+    it is shut, the one press a run makes too."""
     report = {"pages": [], "responses": [], "mapped": True}
     try:
         page.wait_for_timeout(dwell_ms)
@@ -914,8 +1215,9 @@ def survey(page, dwell_ms: int = 2000) -> dict:
         try:
             report["list"] = learned_summary(learn(page))
         except (NotThere, NotLearned, SessionExpired) as e:
-            # Which way it stopped, by the name of the stop only.
-            report["list"] = {"stopped": type(e).__name__}
+            # Which way it stopped, by the name of the stop, and what the
+            # page drew, as counts.
+            report["list"] = dict(getattr(e, "facts", None) or {}, stopped=type(e).__name__)
     else:
         report["list"] = {"stopped": "NotThere"}
     return report
