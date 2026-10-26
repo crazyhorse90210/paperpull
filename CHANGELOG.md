@@ -110,6 +110,20 @@ All notable changes to PaperPull are recorded here. Versioning follows
   Both checks count those inputs now, as they count buttons, and such a
   page is refused as the same page drawn with buttons is. A box to tick or
   a text field is still not counted.
+- **Golden 1 keeps each account's history apart when its statements or
+  its Statement History are drawn as inputs.** Golden 1 finds a dated
+  statement and a Statement History by its role, and an input of type
+  button, submit, image or reset has a button's role. Before each press it
+  marks every control on the page, so a list the press brings can be told
+  from one the dialog still shows, and it finds each account's panel by
+  its Statement History, but both counted only links and buttons. With the
+  statements drawn as such inputs, the list an account before left in the
+  dialog was taken for the next account's when that account's own never
+  came, and its statements were listed and saved as the next account's.
+  With every Statement History drawn so, no panel was found, and the
+  history of the panel that was open was read under the first account's
+  key. Both count those inputs now, and such a page reads as the same page
+  drawn with links.
 
 ## [0.58.0] - 2026-10-24
 
