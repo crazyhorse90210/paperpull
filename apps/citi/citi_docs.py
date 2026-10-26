@@ -451,15 +451,17 @@ class App:
         """(card, YYYY-MM) of every statement saved before, under any key
         but `exclude`. A requested statement of a month already saved is
         the same statement, so it is never taken a second time (#103).
-        Made once a discovery, from the saved records."""
+        Made once a discovery, from the saved records.
+
+        A statement put aside for review with its copy still there counts
+        as saved, as _already_done and _kept count it, so its requested
+        copy does not come as a second file of the same month. Once the
+        review copy is gone, the requested one is taken (review)."""
         cache = getattr(self, "_saved_months_cache", None)
         if cache is None:
             cache = {}
             for key, rec in self.progress.data.items():
-                if not isinstance(rec, dict):
-                    continue
-                if not (rec.get("downloaded_ok") or rec.get("state") in (
-                        State.COMPLETED.value, State.PDF_VERIFIED.value)):
+                if not self._kept(rec):
                     continue
                 when = str(rec.get("date") or "")
                 if re.fullmatch(r"\d{4}-\d{2}-\d{2}", when):
@@ -490,11 +492,14 @@ class App:
 
         A requested statement is gone once the day it stopped being listed
         has passed, or once a list of its card read whole no longer has it.
-        A regular statement is gone only when the regular list no longer has
-        it and a requested statement of its card and month is listed now,
-        since that one is the same statement and the two must never both be
-        taken."""
-        read = set(listed.read) - set(listed.unread)
+        A list that came back empty is how a card with nothing requested
+        answers, and one emptied while statements were still requested has
+        not been seen, so it never says a statement listed before is gone
+        (review). A regular statement is gone only when the regular list no
+        longer has it and a requested statement of its card and month is
+        listed now, since that one is the same statement and the two must
+        never both be taken."""
+        read = set(listed.read) - set(listed.unread) - set(listed.empty)
         requested_listed = getattr(self, "_requested_listed", None) or set()
         regular_listed = getattr(self, "_regular_listed", None) or set()
         requested_months = getattr(self, "_requested_months", None) or set()

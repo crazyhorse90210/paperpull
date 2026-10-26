@@ -69,6 +69,15 @@ All notable changes to PaperPull are recorded here. Versioning follows
   but it says the list was not read whole, writes a failure file and stops
   at its end rather than finish, so Resume reads the list again. Such a
   tab never counts toward saying a purchase is no longer listed.
+- **Citi takes no second copy of a statement kept for review, and an
+  empty requested list no longer sets requested statements aside.** A
+  regular statement put aside for review with its file kept was not
+  counted as saved, so once Citi listed its month as a requested statement
+  that came as a second file. And an answer listing no requested
+  statements marked every requested statement not yet saved as No Longer
+  Listed until a later list showed them again. An empty list now sets
+  nothing aside, and a requested statement is still marked No Longer
+  Listed once the last day Citi lists it has passed.
 
 ## [0.58.0] - 2026-10-24
 

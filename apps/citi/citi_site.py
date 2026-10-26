@@ -515,11 +515,13 @@ class RawDoc:
 @dataclass
 class Listing:
     """What one reading of every card's lists found. `unread` and `read`
-    are the labels of the cards whose requested list was and was not read,
+    are the labels of the cards whose requested list was not and was read,
+    `empty` those of the read ones whose list held nothing, and
     `requested` counts what the requested lists held, by fixed words."""
     docs: List[RawDoc] = field(default_factory=list)
     unread: List[str] = field(default_factory=list)
     read: List[str] = field(default_factory=list)
+    empty: List[str] = field(default_factory=list)
     requested: dict = field(default_factory=dict)
 
 
@@ -577,6 +579,8 @@ def collect_listing(page) -> Listing:
             out.unread.append(acct["label"])
             continue
         out.read.append(acct["label"])
+        if not entries:
+            out.empty.append(acct["label"])
         for e in entries:
             counts["listed"] += 1
             if e["status"] != REQUESTED_READY:
