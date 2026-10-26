@@ -68,6 +68,14 @@ All notable changes to PaperPull are recorded here. Versioning follows
   takes it, writes a failure file and stops at its end rather than finish,
   and that reading never chooses an option that is turned off or that the
   guard refuses.
+- **Navy Federal never calls its statement list whole with an account
+  group or a year left out.** Each account's statements show in a group
+  opened with the others folded, and Previous Statements shows one year at
+  a time. A group that would not open on its own and a year whose choice
+  failed were passed over, and the list was still noted as read whole. Now
+  the run keeps what it read and takes it, writes a failure file and stops
+  at its end rather than finish, so the next run reads the list again. A
+  year that is turned off is never chosen.
 
 ## [0.58.0] - 2026-10-24
 
