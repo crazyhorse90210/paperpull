@@ -61,6 +61,14 @@ All notable changes to PaperPull are recorded here. Versioning follows
   counted, and rows the page's text reading could not read, stop the list
   as rows that would not answer always did, and that reading never chooses
   an option that is turned off or that the guard refuses.
+- **Meijer no longer takes a tab whose rows were still changing for one
+  read whole.** Discovery waits for a tab's rows to stop changing before
+  it reads them. When they were still changing as the wait ran out, it
+  read them all the same, counted the tab as read and noted the order list
+  as whole. Now the purchases read are kept and the run goes on with them,
+  but it says the list was not read whole, writes a failure file and stops
+  at its end rather than finish, so Resume reads the list again. Such a
+  tab never counts toward saying a purchase is no longer listed.
 
 ## [0.58.0] - 2026-10-24
 

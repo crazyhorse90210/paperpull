@@ -161,6 +161,10 @@ class App:
         self._browser = None
         self._work_page = None
         self._cdp_mode = False
+        # Set when discovery read a tab that was not seen whole, so the run
+        # goes on with what it found and stops at its end rather than
+        # finish (see _stop_if_cut_short).
+        self._list_cut_short = False
         self.stats = {
             "mode": "", "started": now_iso(), "ended": "",
             "online_discovered": 0,
@@ -397,13 +401,29 @@ class App:
         When one tab gave rows, the run goes on with them and says which tab
         showed nothing. When neither did, nothing is claimed, and the run
         asks the person to look, or stops under the panel, as it does when
-        the orders page itself does not load."""
+        the orders page itself does not load.
+
+        A tab whose rows were still changing when the wait ran out was not
+        seen whole. Its rows are kept and the run goes on with them, but the
+        list is not taken as whole, so the run stops at its end rather than
+        finish, and Resume reads the list again (review)."""
         while True:
             self._open_orders(page)
             facts: dict = {}
             found = site.collect_both_tabs(page, facts)
             self._kinds_read = frozenset(facts.get("read") or ())
             unread = facts.get("unread") or []
+            unsettled = facts.get("unsettled") or []
+            if found and unsettled:
+                self._list_cut_short = True
+                where = "Meijer's %s %s" % (" and ".join(unsettled),
+                                             "tab" if len(unsettled) == 1 else "tabs")
+                print(f"\n!! The rows on {where} were still changing after "
+                      f"{site.LIST_WAIT_MS // 1000} seconds,")
+                print("so the order list was not read whole. What was read is kept, and this run")
+                print("stops at its end rather than finish. The next run reads the list again.")
+                self.write_failure("read both tabs of the order list",
+                                   "the rows on a tab never settled")
             if found and not unread:
                 return found
             # Rows that showed and were gone again by the time they were read
@@ -479,9 +499,15 @@ class App:
             print("asks there yourself, then run --login again.")
         self.close()
 
-    def cmd_discover(self, types: Optional[List[str]] = None, quiet: bool = False) -> dict:
+    def cmd_discover(self, types: Optional[List[str]] = None, quiet: bool = False,
+                     finish: bool = True) -> dict:
         """Discovery pass: the orders page, then ?page=2 and on
-        until a page adds no order the earlier pages did not have."""
+        until a page adds no order the earlier pages did not have.
+
+        A list read only in part (_read_both_tabs) keeps the purchases it
+        found, and Pilot, Run All and Resume go on with them, but the run
+        stops at its end rather than finish. With finish=False the caller
+        does that once it has used them."""
         # A listing that stops on the way, however it stops, is noted as one
         # that stopped, so Resume reads the list again (paperpull_core.listing).
         listing.started(self)
@@ -546,14 +572,19 @@ class App:
                   "again, so this run tries them again.")
         self.discovery.save()
         # The whole list is in, and only now may a Resume carry on from it
-        # without reading it again (paperpull_core.listing).
-        listing.read_whole(self)
+        # without reading it again (paperpull_core.listing). A list read in
+        # part is not, and the listing stays one that stopped.
+        if not self._list_cut_short:
+            listing.read_whole(self)
 
         all_recs = list(self.discovery.data.values())
         self.stats["online_discovered"] = len(all_recs)
 
         if not quiet:
-            print(f"\nDiscovery complete. Purchases known: {len(all_recs)}")
+            if self._list_cut_short:
+                print(f"\nDiscovery read part of the order list. Purchases known: {len(all_recs)}")
+            else:
+                print(f"\nDiscovery complete. Purchases known: {len(all_recs)}")
             by_year = {}
             for r in all_recs:
                 y = (r.get("purchase_date") or "?")[:4]
@@ -563,7 +594,19 @@ class App:
             dates = sorted(r.get("purchase_date") for r in all_recs if r.get("purchase_date"))
             if dates:
                 print(f"  Date range: {dates[0]} .. {dates[-1]}")
+        if finish:
+            self._stop_if_cut_short()
         return {"new": n_new}
+
+    def _stop_if_cut_short(self) -> None:
+        """A run that did not read the whole order list did not finish, and
+        must not read as a clean one. Once it has used what came, it leaves
+        on SystemExit the way a run leaves on a sign-out, which the panel
+        reports as stopped after Pilot, Run All and Resume."""
+        if self._list_cut_short:
+            print("\nNot all of Meijer's order list was read, so this run stops here rather")
+            print("than finish. Run it again later to read the rest.")
+            raise SystemExit(0)
 
     def _drop_undated_leftovers(self, seen_keys) -> int:
         """Forget purchases an earlier version recorded with no date that
@@ -1432,17 +1475,19 @@ class App:
     def cmd_pilot(self):
         self.stats["mode"] = "pilot"
         print("PILOT MODE - limited supervised test run.")
-        self.cmd_discover(types=[ONLINE, IN_STORE], quiet=False)
+        self.cmd_discover(types=[ONLINE, IN_STORE], quiet=False, finish=False)
         selected: List[Purchase] = self._select_purchases(
             ONLINE, limit=self.config["pilot_online"])
         selected += self._select_purchases(
             IN_STORE, limit=self.config.get("pilot_instore", 5))
         if not selected:
             print("\nNo purchases discovered to pilot. Run --diagnose to inspect pages.")
+            self._stop_if_cut_short()
             return
         print(f"\nProcessing {len(selected)} pilot purchase(s)...")
         self.process_purchases(selected, dry_run=self.args.dry_run)
         self._pilot_report(selected)
+        self._stop_if_cut_short()
 
     def _pilot_report(self, selected: List[Purchase]):
         print("\n" + "=" * 70)
@@ -1502,12 +1547,13 @@ class App:
             if ask("> ").strip().upper() != "YES":
                 print("Aborted. (Run the pilot first if you haven't: --pilot)")
                 return
-        self.cmd_discover(types=types, quiet=False)
+        self.cmd_discover(types=types, quiet=False, finish=False)
         selected: List[Purchase] = []
         for t in types:
             selected += self._select_purchases(t)
         print(f"\nProcessing {len(selected)} purchase(s)...")
         self.process_purchases(selected, dry_run=self.args.dry_run)
+        self._stop_if_cut_short()
 
     def cmd_resume(self):
         self.stats["mode"] = "resume"
@@ -1515,9 +1561,10 @@ class App:
         # stopped before the list was read whole, that is some of them or none,
         # and Resume finished clean with the rest never looked for. So the list
         # is read before anything else, and a listing that stops again stops
-        # the run (paperpull_core.listing).
+        # the run (paperpull_core.listing). A list read again only in part
+        # still goes on with what it found, and the run stops at its end.
         if listing.read_again_first(self):
-            self.cmd_discover(quiet=True)
+            self.cmd_discover(quiet=True, finish=False)
         # Only the purchases inside the run's scope, chosen as Pilot and Run
         # All choose them, so a Resume with a year chosen takes that year
         # alone. The limit waits until the done ones are left out.
@@ -1531,9 +1578,11 @@ class App:
             print("Nothing to resume - everything in scope is complete."
                   if listing.scoped(self) else
                   "Nothing to resume - all discovered purchases are complete.")
+            self._stop_if_cut_short()
             return
         print(f"Resuming: {len(pend)} incomplete purchase(s).")
         self.process_purchases(pend, dry_run=self.args.dry_run)
+        self._stop_if_cut_short()
 
 
     def cmd_rename(self):
