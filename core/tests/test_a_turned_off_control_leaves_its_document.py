@@ -74,6 +74,9 @@ STOPS = {
     ("amex", "download_document", "click", "press the dialog download"): (1,
         "the dialog's own Download, once the row's Download opened the dialog, so a "
         "press was made for the document already"),
+    ("bofa", "open_statements", "click", "expand the statements heading"): (1,
+        "opens the Statements heading every statement's Download PDF link is drawn "
+        "under, so a turned off heading would leave every statement"),
     ("chasebusiness", "_press", "click", ""): (1,
         "one press site serves the four controls that reach a list, an account in the "
         "menu, Statements, the year picker and a year in it, so a turned off one "
