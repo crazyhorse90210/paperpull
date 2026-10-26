@@ -1152,8 +1152,11 @@ def named_by_type(text: str, plans, chosen: str) -> tuple:
         return False, "the header did not name one employer for it"
     hay = _bare(text)
     others = [p for digest, p in by_digest.items() if digest != chosen]
-    if any(_bare(_name_key(p)) and _bare(_name_key(p)) in hay for p in others):
-        return False, "it names another plan of the list"
+    # Each other plan beside its name, looked for as plans_named looks.
+    keyed = [(p, _bare(_name_key(p))) for p in others]
+    for _other, key in keyed:
+        if key and key in hay:
+            return False, "it names another plan of the list"
     here, unknown = [], []
     for other in others:
         theirs = plan_type(other)
