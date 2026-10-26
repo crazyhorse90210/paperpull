@@ -17,6 +17,7 @@ PDF carrying the id of the document it is.
 """
 import importlib
 import json
+import shutil
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -699,6 +700,55 @@ def test_rows_alike_take_every_number_their_records_hold():
         [row("B"), row("B"), row("B")], across, fields=fields)] == [1, 2, 0]
 
 
+def test_a_saved_record_discovery_lacks_keeps_the_number_its_key_holds():
+    """A history moved to another computer brings the saved records and no
+    discovery, and with --minimal none of the fields a key is made of. Each
+    saved record is known by its key, read through the app's key_of, and
+    keeps the number its key holds, as the records discovery kept did."""
+    from paperpull_core.keys import told_apart
+    fields = ("doc_type", "title", "date", "account")
+    done = {"state": "Completed", "downloaded_ok": True}
+
+    def row(account, title="Monthly Statement", doc_type="BANK"):
+        return {"doc_type": doc_type, "title": title, "date": DATE,
+                "account": account, "document_id": "new"}
+
+    def key_of(r):
+        # A key that leaves the kind out, as a cut title can leave out what
+        # tells two apart.
+        return "%s:%s" % (r["account"], r["title"])
+
+    def numbers(rows, saved, **kw):
+        return [occurrence for occurrence, _sure in told_apart(
+            rows, {}, fields=fields, saved=saved, key_of=key_of, **kw)]
+
+    # Numbered across accounts, then moved with --minimal.
+    across = {"A:Monthly Statement": done, "B:Monthly Statement#1": done,
+              "B:Monthly Statement#2": done}
+    for accounts, want in [("ABB", [0, 1, 2]), ("BBA", [1, 2, 0]), ("BA", [1, 0])]:
+        assert numbers([row(a) for a in accounts], across) == want, accounts
+    # One alone keeps its number, and surely names it.
+    assert told_apart([row("B")], {}, fields=fields, key_of=key_of,
+                      saved={"B:Monthly Statement#1": done}) == [(1, True)]
+    # Without key_of no number is read off a key, as before.
+    assert [occurrence for occurrence, _sure in told_apart(
+        [row("B")], {}, fields=fields, saved={"B:Monthly Statement#1": done})] == [0]
+    # A key no row has now, and a number the app never writes, are read as
+    # nothing.
+    assert numbers([row("B")], {"C:Monthly Statement#1": done,
+                                "B:Monthly Statement#01": done}) == [0]
+    # A key that could be either row's is read as neither.
+    assert numbers([row("A", "Notice"), row("A", "Notice#2")],
+                   {"A:Notice#2": done}) == [0, 0]
+    assert numbers([row("A"), row("A", doc_type="CARD")],
+                   {"A:Monthly Statement#1": done}) == [0, 0]
+    # A record discovery holds is its own, and the saved one is not added
+    # again beside it.
+    held = {"B:Monthly Statement#1": dict(row("B"), occurrence=1, document_id="old")}
+    assert told_apart([row("B")], held, fields=fields, key_of=key_of,
+                      saved={"B:Monthly Statement#1": done}) == [(1, True)]
+
+
 # -- two accounts' documents of one day --------------------------------------
 #
 # Both apps keep a document under its account, and up to 0.33 their sites
@@ -706,8 +756,9 @@ def test_rows_alike_take_every_number_their_records_hold():
 # were numbered across accounts, so a statement saved at 0 in a second
 # account found 0 taken by the first, was numbered 1, and was downloaded
 # again beside the one saved (#122). An archive numbered either way keeps
-# every number it has and fetches nothing again. Each document here is named
-# by its account's letter, A or B.
+# every number it has and fetches nothing again, on this computer or on one
+# its history moved to. Each document here is named by its account's
+# letter, A or B.
 
 class CapitalOneAccounts(Provider):
     """Two bank accounts' statements of one day."""
@@ -793,18 +844,52 @@ def numbered_as(home, across: bool) -> None:
         (home.out / name).write_text(json.dumps(rewritten), encoding="utf-8")
 
 
+def history_moved(home, how) -> None:
+    """The history moved to another computer the files were copied to, by
+    Export and Import history (tools/migrate.py), whole or with --minimal.
+    It carries progress.json and never discovery.json."""
+    if how is None:
+        return
+    sys.path.insert(0, str(REPO / "tools"))
+    try:
+        migrate = importlib.import_module("migrate")
+    finally:
+        sys.path.pop(0)
+    # What tells the tool which provider's history the folder keeps.
+    shutil.copy(home.app / "storage.py", home.out / "storage.py")
+    archive = home.out.parent / "history.ppz"
+    assert migrate.export(home.out.parent, archive, minimal=how == "minimal") == 0
+    (home.out / "discovery.json").unlink()
+    (home.out / "progress.json").write_text("{}", encoding="utf-8")
+    assert migrate.do_import(archive, home.out.parent, assume_yes=True) == 0
+    (home.out / "storage.py").unlink()
+    moved = json.loads((home.out / "progress.json").read_text(encoding="utf-8"))
+    assert moved and all(rec.get("downloaded_ok") for rec in moved.values())
+    if how == "minimal":
+        assert not any("account" in rec or "occurrence" in rec for rec in moved.values())
+
+
+MOVED = pytest.mark.parametrize("moved", [None, "whole", "minimal"],
+                                ids=["kept_here", "moved_whole", "moved_minimal"])
+
+
 @pytest.mark.parametrize("two", list(TWO_ACCOUNTS), indirect=True)
 @pytest.mark.parametrize("across", [False, True], ids=["each_account", "across_accounts"])
 @pytest.mark.parametrize("lasting", [True, False], ids=["ids_last", "ids_do_not_last"])
 @pytest.mark.parametrize("listed", [["A1", "B1"], ["A1", "B1", "B2"]],
                          ids=["one_each", "two_alike_in_one"])
+@MOVED
 def test_an_archive_keeps_each_accounts_numbers_and_fetches_nothing_again(
-        two, across, lasting, listed):
+        two, across, lasting, listed, moved):
+    """Kept on this computer, or moved to another one, where the history
+    keeps the saved records and not discovery's, with or without their
+    fields, and so says by its keys alone which number each holds."""
     two.provider.lasting = lasting
     two.provider.ids = list(listed)
     two.run_all()
     assert two.on_disk() == sorted(listed)
     numbered_as(two, across)
+    history_moved(two, moved)
     saved = sorted(json.loads((two.out / "progress.json").read_text(encoding="utf-8")))
 
     # Listed the other way around, so no account is first by luck, and with
@@ -824,12 +909,14 @@ def test_an_archive_keeps_each_accounts_numbers_and_fetches_nothing_again(
 
 @pytest.mark.parametrize("two", list(TWO_ACCOUNTS), indirect=True)
 @pytest.mark.parametrize("lasting", [True, False], ids=["ids_last", "ids_do_not_last"])
+@MOVED
 def test_an_archive_that_took_a_statement_again_on_0_34_takes_nothing_more(
-        two, lasting, monkeypatch):
+        two, lasting, moved, monkeypatch):
     """Saved up to 0.33, each account on its own, then run on 0.34 to 0.58,
     which numbered across accounts and took the second account's statement
     again under 1, beside the one saved at 0. Both records and both files
-    stay as they are, and nothing more is fetched."""
+    stay as they are, and nothing more is fetched, here or on another
+    computer the history moved to."""
     from paperpull_core.keys import told_apart
     two.provider.lasting = lasting
     two.provider.ids = ["A1", "B1"]
@@ -843,6 +930,7 @@ def test_an_archive_that_took_a_statement_again_on_0_34_takes_nothing_more(
         two.provider.new_session()
         two.run_all()
     assert two.on_disk() == ["A1", "B1", "B1"], two.held()
+    history_moved(two, moved)
     saved = sorted(json.loads((two.out / "progress.json").read_text(encoding="utf-8")))
     assert len(saved) == 3
 
@@ -855,14 +943,17 @@ def test_an_archive_that_took_a_statement_again_on_0_34_takes_nothing_more(
     assert two.on_disk() == ["A1", "B1", "B1"], two.held()
     assert two.left_for_a_person() == {}
     known = json.loads((two.out / "discovery.json").read_text(encoding="utf-8"))
-    assert sorted(known) == saved
+    # Discovery moved with nothing, so it holds only what was listed since.
+    assert (sorted(known) == saved) if moved is None else (set(known) <= set(saved))
 
 
 def test_every_app_that_tells_documents_apart_numbers_by_its_whole_key():
     """An app numbering documents with told_apart names, in `fields`, every
     field its key is made of but the number. Numbered across a field its key
     holds, two documents saved at 0 in that field's two values were one
-    group, so the second found 0 taken and was downloaded again (#122).
+    group, so the second found 0 taken and was downloaded again (#122). It
+    hands told_apart its key_of too, without which a history moved to
+    another computer is numbered by place.
 
     stable_occurrences is not held to this. Its apps whose key holds a field
     their numbering leaves out (the category, or the account in IBKR and
@@ -900,5 +991,10 @@ def test_every_app_that_tells_documents_apart_numbers_by_its_whole_key():
                 assert fields is not None, "%s: fields not read" % path.name
                 assert keys[0] <= fields, "%s numbers across %s, which its key holds" % (
                     path.name, ", ".join(sorted(keys[0] - fields)))
+                # A history moved to another computer has no discovery, and
+                # its saved records are known by their keys alone.
+                assert any(kw.arg == "key_of" for kw in call.keywords), (
+                    "%s numbers a moved history by place, so a number saved across "
+                    "accounts is lost" % path.name)
                 found[path.parent.name] = sorted(fields)
     assert {"capitalone", "schwab"} <= set(found), found

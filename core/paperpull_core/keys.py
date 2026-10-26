@@ -199,8 +199,40 @@ def twins(record, existing, fields=("title", "date")) -> int:
                if isinstance(known, dict) and _what_it_is(known, fields) == what)
 
 
+def _saved_alone(rows, records, saved, fields, key_of):
+    """The saved records `records` does not hold, each as a record of the
+    rows whose key it is, with the number its key holds.
+
+    A history moved to another computer brings the app's progress and never
+    its discovery, and --minimal none of the fields a key is made of, so a
+    saved record is known by its key alone. A key no row listed now has is
+    left out, and so is one that could be read as either of two rows'."""
+    fields = tuple(fields) + ("account",)
+    whats = {}
+    for row in rows:
+        whats.setdefault(key_of(row), set()).add(_what_it_is(row, fields[:-1]))
+    found = {}
+    for key, record in saved.items():
+        if key in records or not isinstance(record, dict):
+            continue
+        readings = [(key, 0)] if key in whats else []
+        base, _mark, number = key.rpartition("#")
+        # Only a number as the app writes one, never #01.
+        if (base in whats and number.isascii() and number.isdigit()
+                and number == str(int(number))):
+            readings.append((base, int(number)))
+        if len(readings) != 1 or len(whats[readings[0][0]]) != 1:
+            continue
+        base, occurrence = readings[0]
+        record = dict(record)
+        record.update(zip(fields, next(iter(whats[base]))))
+        record["occurrence"] = occurrence
+        found[key] = record
+    return found
+
+
 def told_apart(rows, existing=None, fields=("title", "date"), id_field="document_id",
-               saved=None):
+               saved=None, key_of=None):
     """Number the rows as stable_occurrences does, the provider's id first,
     and say of each row whether its number surely names that document.
 
@@ -239,12 +271,21 @@ def told_apart(rows, existing=None, fields=("title", "date"), id_field="document
     alike can hold 1 and 2. Given 1 and then the lowest number free, the second
     was taken for a new document at 0.
 
+    A history moved to another computer brings `saved` without `existing`,
+    so a saved record discovery lacks counts as a record too, of the rows
+    whose key it is. `key_of` takes a row and answers its key before a
+    number is added. Without it a moved archive numbered across accounts
+    was numbered by place, each account on its own, and a second account's
+    statement saved under 1 was downloaded again at 0.
+
     Answers (occurrence, sure) for each row, in order.
     """
     rows = list(rows)
     records = {key: record for key, record in (existing or {}).items()
                if isinstance(record, dict)}
     saved = saved or {}
+    if key_of is not None:
+        records.update(_saved_alone(rows, records, saved, fields, key_of))
 
     def is_saved(key):
         record = saved.get(key)

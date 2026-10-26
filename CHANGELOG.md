@@ -191,7 +191,10 @@ All notable changes to PaperPull are recorded here. Versioning follows
   their own again. An archive numbered across accounts from 0.34 to 0.58
   keeps every number it has, two documents alike in one account included,
   and one that already took the "(2)" copies keeps both records and
-  fetches nothing more. @davidrudnick found it in an archive going back to
+  fetches nothing more. The same holds once the history moves to another
+  computer through Export and Import history, whole or with --minimal,
+  since the app then reads each saved number off its record's key.
+  @davidrudnick found it in an archive going back to
   0.19 and wrote the Schwab fix, which on that archive fetched exactly the
   20 new documents. Capital One had the same numbering and takes the same
   fix.

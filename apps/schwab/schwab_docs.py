@@ -112,6 +112,15 @@ class Document:
         return cls(**d)
 
 
+def listed_key(d: dict) -> str:
+    """The key of the document a listed row names, before it is numbered,
+    from the row as _record_schwab_doc reads it."""
+    return Document(title=re.sub(r"\s+", " ", (d.get("title") or "")).strip(),
+                    account=re.sub(r"\s+", " ", (d.get("account") or "")).strip(),
+                    doc_type=d.get("doc_type") or "",
+                    date=(d.get("date") or "").strip()).key
+
+
 def migrate_legacy_keys(records: dict) -> int:
     """Move records written while the account was cut to forty characters.
 
@@ -439,12 +448,14 @@ class App:
         # 0.58 they were numbered across accounts, so a statement saved at 0
         # in a second account found 0 taken and was downloaded again. An
         # archive numbered across accounts keeps its numbers, since a row
-        # takes those its records hold first.
+        # takes those its records hold first. A history moved to another
+        # computer brings no discovery, so its saved records are found by
+        # their keys (listed_key).
         self._placed = {}
         alike = ("doc_type", "title", "date", "account")
         for d, (occ, sure), place in zip(raw, _told_apart(
-                raw, self.discovery.data, fields=alike, saved=self.progress.data),
-                _places(raw, fields=alike)):
+                raw, self.discovery.data, fields=alike, saved=self.progress.data,
+                key_of=listed_key), _places(raw, fields=alike)):
             d["occurrence"] = occ
             d["place"] = place
             n_new += self._record_schwab_doc(d, charitable_ids, sure)
