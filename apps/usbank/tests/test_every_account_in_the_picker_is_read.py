@@ -338,7 +338,7 @@ def test_an_empty_list_is_read_again_before_it_is_taken_as_empty(monkeypatch):
     monkeypatch.setattr(site, "_wait_for_list", lambda pg, ms=None: True)
     monkeypatch.setattr(site, "account_options", lambda pg: site._read([CARD], whole=True))
     monkeypatch.setattr(site, "period_options", lambda pg: ["2031"])
-    monkeypatch.setattr(site, "select_period", lambda pg, y: True)
+    monkeypatch.setattr(site, "select_period", lambda pg, y, **kw: True)
     monkeypatch.setattr(site, "_year_on_show", lambda pg: "2031")
     monkeypatch.setattr(site, "download_controls_shown", lambda pg: 0)
     monkeypatch.setattr(site, "read_rows", lambda pg, acct: reads.pop(0))

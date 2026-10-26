@@ -350,7 +350,7 @@ def test_a_scoped_run_never_selects_a_year_it_will_throw_away(monkeypatch):
     monkeypatch.setattr(site, "ensure_statements", lambda page: True)
     monkeypatch.setattr(site, "account_options", lambda page: ["Card ...4321"])
     monkeypatch.setattr(site, "period_options", lambda page: ["2026", "2025", "2024", "2019"])
-    monkeypatch.setattr(site, "select_period", lambda page, y: (selected.append(y), True)[1])
+    monkeypatch.setattr(site, "select_period", lambda page, y, **kw: (selected.append(y), True)[1])
     monkeypatch.setattr(site, "read_rows", lambda page, acct: [])
     site.usbank_collect_structured(page=None, keep=lambda y: y == "2025")
     assert selected == ["2025"]

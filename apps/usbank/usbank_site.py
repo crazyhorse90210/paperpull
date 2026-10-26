@@ -1300,10 +1300,6 @@ def _year_picker(page):
     return btn.first, ""
 
 
-def _year_button(page):
-    return _year_picker(page)[0]
-
-
 def reset_to_newest_period(page) -> str:
     newest = (period_options(page) or [""])[0]
     if newest and select_period(page, newest):
@@ -1351,13 +1347,23 @@ def period_options(page) -> Read:
     return Read(years)
 
 
-def select_period(page, year: str) -> bool:
+def select_period(page, year: str, offered: bool = False) -> bool:
+    """Choose `year`. True on a page with no year picker, whose list is the
+    one on show, unless the year was `offered` by a picker, which is then
+    not there to choose it. False when the picker would not answer, which
+    was read as no picker, so the year before was read in its place."""
     year = str(year)
-    btn = _year_button(page)
+    btn, why = _year_picker(page)
+    if why:
+        log.info("year %s not chosen, %s", year, why)
+        return False
     if btn is None:
         sel, years = year_select(page)
         if sel is not None and years:
             return year in years and _select_option(page, sel, year)
+        if offered:
+            log.info("year %s not chosen, the year picker that offered it is gone", year)
+            return False
         return True
     if current_period(page) == year:
         return True
@@ -1647,6 +1653,7 @@ def usbank_collect_structured(page, keep=None) -> Read:
     found: List[dict] = []
     years = None
     shown = unchosen = 0
+    year_picker_seen = False
     for acct in accounts:
         if (len(accounts) > 1 or pick_each) and not select_account(page, acct):
             log.info("  could not choose the account %r", (acct or "(account)")[:60])
@@ -1654,7 +1661,13 @@ def usbank_collect_structured(page, keep=None) -> Read:
             unchosen += 1
             passed_over.add("account picker")
             continue
+        if year_picker_seen:
+            # The year picker an account before showed may be drawn again
+            # a moment after this one is chosen, as it is when the page
+            # opens (#116).
+            _wait_for_year_picker(page)
         offered = period_options(page)
+        year_picker_seen = year_picker_seen or bool(offered)
         if getattr(offered, "not_read", ""):
             log.info("U.S. Bank: %s", offered.not_read)
             passed_over.add("year picker")
@@ -1668,7 +1681,7 @@ def usbank_collect_structured(page, keep=None) -> Read:
         log.info("U.S. Bank: %s x %d year(s)", (acct or "(account)")[:60], len(periods))
         drew = set()
         for period in periods:
-            if period and not select_period(page, period):
+            if period and not select_period(page, period, offered=True):
                 whole = False
                 passed_over.add("year picker")
                 continue

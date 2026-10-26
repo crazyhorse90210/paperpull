@@ -125,7 +125,7 @@ def test_a_year_that_could_not_be_chosen_is_passed_over(page, monkeypatch):
     show(page, accounts=(CHECKING,), chosen=CHECKING)
     real = site.select_period
     monkeypatch.setattr(site, "select_period",
-                        lambda pg, year: False if year == "2030" else real(pg, year))
+                        lambda pg, year, **kw: False if year == "2030" else real(pg, year, **kw))
     got = site.usbank_collect_structured(page)
     assert got.passed_over == ("year picker",)
 
@@ -172,6 +172,82 @@ def test_a_year_picker_that_would_not_answer_is_never_none(page, monkeypatch, me
     offered = site.period_options(page)
     assert list(offered) == [] and offered.not_read == "the year picker would not answer"
     assert "year picker" in site.usbank_collect_structured(page).passed_over
+
+
+def _at_the_2030_choice(monkeypatch, script):
+    """Run `script` in the page as 2030 is about to be chosen."""
+    real = site.select_period
+
+    def select(pg, year, **kw):
+        if year == "2030":
+            pg.evaluate(script)
+        return real(pg, year, **kw)
+    monkeypatch.setattr(site, "select_period", select)
+
+
+def test_a_year_picker_that_would_not_answer_at_its_choice_is_passed_over(page, monkeypatch):
+    """The year picker's words stop coming as 2030 is chosen. It was taken
+    for a page with no year picker, the choice for made, and the 2031 list
+    read in 2030's place (review)."""
+    show(page, accounts=(CHECKING,), chosen=CHECKING)
+    stall_reads(monkeypatch, {"year", "shown"}, locator=("inner_text",))
+    _at_the_2030_choice(monkeypatch, """() => {
+      document.getElementById('exp_button_year-filter-select').setAttribute('data-guid', 'year');
+      document.querySelector('.dropdown__btn-selection').setAttribute('data-guid', 'shown');
+    }""")
+    got = site.usbank_collect_structured(page)
+    assert "2030-12-13" not in {r["date"] for r in got}
+    assert got.passed_over == ("year picker",)
+
+
+def test_a_year_picker_gone_at_its_choice_is_passed_over(page, monkeypatch):
+    """The picker that offered 2030 is not on the page as 2030 is chosen."""
+    show(page, accounts=(CHECKING,), chosen=CHECKING)
+    _at_the_2030_choice(monkeypatch, """() =>
+      document.getElementById('exp_button_year-filter-select').remove()""")
+    assert site.usbank_collect_structured(page).passed_over == ("year picker",)
+
+
+def test_a_page_with_no_year_picker_is_still_its_list_on_show(page):
+    """A download on a page that never had a year picker reads the list on
+    show, as it always did."""
+    show(page, accounts=(CHECKING,), chosen=CHECKING)
+    page.evaluate("() => document.getElementById('exp_button_year-filter-select').remove()")
+    assert site.select_period(page, "2031") is True
+    assert site.select_period(page, "2031", offered=True) is False
+
+
+def test_a_download_takes_no_year_on_a_picker_that_would_not_answer(page, monkeypatch, tmp_path):
+    """A download chose a year on a page whose year picker would not
+    answer as a page without one, and looked for the row in the list on
+    show. Now it chooses nothing and says so."""
+    show(page, accounts=(CHECKING,), chosen=CHECKING)
+    _guids(page)
+    stall_reads(monkeypatch, {"year"}, locator=("inner_text",))
+    assert site.select_period(page, "2030") is False
+    got = site.usbank_download(page, page.context, CHECKING, "2030-12-13",
+                               tmp_path / "statement.pdf")
+    assert not got and got.step == "choose the year"
+
+
+def test_a_year_picker_drawn_again_after_an_account_is_waited_for(page, monkeypatch):
+    """The year picker is drawn again a moment after the card is chosen.
+    Its years were asked for before it came back, and the card was read for
+    the year on show alone (review)."""
+    show(page)
+    real = site.select_account
+
+    def choose(pg, label):
+        got = real(pg, label)
+        if label == CARD:
+            pg.evaluate("""() => { const b = document.getElementById('exp_button_year-filter-select');
+              b.remove();
+              setTimeout(() => document.getElementById('year-filter-select').prepend(b), 500); }""")
+        return got
+    monkeypatch.setattr(site, "select_account", choose)
+    got = site.usbank_collect_structured(page)
+    assert {r["date"][:4] for r in got if r["account"] == CARD} == {"2030", "2031"}
+    assert got.passed_over == ()
 
 
 def test_an_account_picker_whose_options_would_not_answer_is_passed_over(page, monkeypatch):
