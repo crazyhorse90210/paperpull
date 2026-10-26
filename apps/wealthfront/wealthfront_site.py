@@ -400,23 +400,33 @@ def collect_documents(page) -> List[RawDoc]:
 TAX_YEAR_RE = re.compile(r"tax\s*year\s*:?\s*(\d{4})", re.I)
 
 
-def get_tax_years(page) -> List[str]:
+class TaxYears(list):
+    """The tax years to read. picker is True when they are the tax-year
+    dropdown's own options, so one that would not be chosen is a year of
+    the list not read, where years read from the page's text may be any
+    year it prints."""
+    picker = False
+
+
+def get_tax_years(page) -> TaxYears:
     """Tax years offered above the tax-document table. The control is a
-    native <select> whose options read 'Tax Year: 2025'."""
-    years: List[str] = []
+    native <select> whose options read 'Tax Year: 2025'. An option that is
+    turned off cannot be chosen, and is not one it offers."""
+    years = TaxYears()
     try:
         sel = page.locator(FALLBACK["select_tax_year"])
         if sel.count() > 0:
-            for opt in sel.first.locator("option").all_inner_texts():
+            for opt in sel.first.locator("option:not([disabled])").all_inner_texts():
                 m = TAX_YEAR_RE.search(opt)
                 if m:
                     years.append(m.group(1))
     except Exception:
         pass
+    years.picker = bool(years)
     if not years:  # fallback: scrape the page text
         try:
             body = page.locator("body").inner_text(timeout=8000)
-            years = list(dict.fromkeys(TAX_YEAR_RE.findall(body)))
+            years.extend(dict.fromkeys(TAX_YEAR_RE.findall(body)))
         except Exception:
             pass
     return years

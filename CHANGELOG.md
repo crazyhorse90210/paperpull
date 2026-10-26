@@ -76,6 +76,14 @@ All notable changes to PaperPull are recorded here. Versioning follows
   the run keeps what it read and takes it, writes a failure file and stops
   at its end rather than finish, so the next run reads the list again. A
   year that is turned off is never chosen.
+- **Wealthfront never calls its document list whole with a tax year left
+  out.** A tax year its dropdown offered and would not take was passed
+  over, and the list was still noted as read whole. Now the run keeps what
+  it read and takes it, writes a failure file and stops at its end rather
+  than finish. Tax years read from the page's text, with no dropdown to
+  choose them in, and a year that is turned off are left as they were. A
+  statement type the filter would not take is still passed over quietly,
+  since an account may hold none of that type.
 
 ## [0.58.0] - 2026-10-24
 
