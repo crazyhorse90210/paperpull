@@ -57,10 +57,10 @@ checked, one that names another statement's dates better than its own, and
 one that names a statement ending on the same day as plainly as its own
 are put in Manual Review rather than filed, with a note saying which. With
 `"refuse_wrong_documents": true` in `config.json`, one that names another
-statement's dates better is not kept at all, when it had a day of its own
-to be checked by. One whose first and last day are both other statements'
-days goes to Manual Review even then. The name PayPal gives a downloaded
-file carries the account's id and is never kept.
+statement's dates better is not kept at all. Its first day is checked
+against the statements ending on its last day and its last day against
+the others, so it always has a day of its own to be checked by. The name
+PayPal gives a downloaded file carries the account's id and is never kept.
 
 **One account per setup.** A personal account's statement and a business
 account's statement for the same month are the same record to this app,

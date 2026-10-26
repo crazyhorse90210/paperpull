@@ -536,11 +536,29 @@ class App:
         site the run stops here and says so (tabs.on_its_site)."""
         return tabs.on_its_site(self, site.is_safe_url, "Navy Federal")
 
+    @staticmethod
+    def _rivals(docs: List[Document], doc: Document) -> tuple:
+        """The statements this one could be taken for, in two groups, since
+        each differs from it by another fact. Every other account's of the
+        same day differs by its account, and its own account's either side
+        (identity.rivals_for) differ by their day. Asked together, the day
+        the first share and the account the second share would both stop
+        counting, and nothing would be left to tell them apart by. Every
+        account is billed on the same day here, so that was every statement
+        on a shared day."""
+        same_day = [site.identity_for(d) for d in docs
+                    if d is not doc and d.date == doc.date]
+        mine = [d for d in docs if d.account == doc.account]
+        near = []
+        for j, d in enumerate(mine):
+            if d is doc:
+                near = [r for r in identity.rivals_for([site.identity_for(m) for m in mine], j)
+                        if r.date != doc.date]
+        return same_day, near
+
     def process(self, docs: List[Document], dry_run: bool = False):
         # Every row, so a capture can be checked against the ones it
-        # could have come back with instead. Built once rather than per
-        # document, because it is the same list every time.
-        all_rows = [site.identity_for(d) for d in docs]
+        # could have come back with instead (_rivals).
         for i, doc in enumerate(docs, 1):
             print(f"\n[{i}/{len(docs)}] {doc.date or '(no date)'}  "
                   f"{doc.category}  {doc.summary}")
@@ -561,9 +579,8 @@ class App:
                 pass
             try:
                 page = self._on_its_site()
-                self.download_one(
-                    page, doc, filename,
-                    rivals=identity.rivals_for(all_rows, i - 1))
+                same_day, near = self._rivals(docs, doc)
+                self.download_one(page, doc, filename, rivals=same_day, near=near)
             except KeyboardInterrupt:
                 print("\nInterrupted. Progress saved; run --resume to continue.")
                 raise
@@ -574,13 +591,18 @@ class App:
             self._delay()
 
     def download_one(self, page, doc: Document, filename: str,
-                     rivals=()):
+                     rivals=(), near=()):
         """Download one document PDF straight to its final path.
 
         Dated documents (statements) expose a direct document URL, which is
         the most reliable route. Tax-table rows have only a Download button,
         so that row is re-found by its account + form text (row indexes shift
         whenever a filter or page changes).
+
+        `rivals` are the other accounts' statements of its day, which the
+        capture checks it against, and `near` its own account's either side,
+        which it is checked against again once saved, or by the capture when
+        there are no `rivals` (_rivals).
         """
         self.check_session(page)
         folder = self.paths.folder_for(doc.category)
@@ -603,14 +625,37 @@ class App:
         # finds this row's View button. Catching the blob tab it opens,
         # and checking the statement is this one, is the interceptor's.
         request = site.statement_request(page, doc.account, doc.date)
+        strict = bool(self.config.get("refuse_wrong_documents", False))
         got = None
         if request is not None:
+            # Checked against the other accounts' statements of its day, or
+            # with none, against its own account's either side (_rivals).
             got = delivery.deliver(
                 page, request, out_path,
                 is_safe_url=site.is_safe_url,
-                rivals=rivals,
+                rivals=rivals or near,
                 journal=self.journal,
-                strict=bool(self.config.get("refuse_wrong_documents", False)))
+                strict=strict)
+            if got.ok and rivals and near:
+                # Then again against its own account's either side, so its day
+                # is checked even when the capture told it apart by its account
+                # alone. Refused, it is treated as the capture treats a wrong
+                # statement. With nothing either side no other statement's day
+                # could be found in it, and its own day not found destroys
+                # nothing, as it never did beside another account's statement.
+                again = identity.distinguish(out_path, request.expect, near)
+                self.journal.op("verify", "check the statement again", outcome=again.outcome,
+                                checked=len(again.checked), matched=len(again.matched))
+                if again.outcome == identity.REFUSED and strict:
+                    try:
+                        out_path.unlink()
+                    except OSError as e:
+                        # Kept where it was saved, as it is with refusing off,
+                        # rather than said to be destroyed while it is there.
+                        log.info("could not remove the refused statement: %s", type(e).__name__)
+                    else:
+                        got = delivery.Delivery(delivery.WRONG, got.mechanism, again,
+                                                got.armed, got.bytes_len)
             print("  %s" % got.say())
         saved = bool(got and got.ok)
         if got is not None and got.outcome == delivery.WRONG:

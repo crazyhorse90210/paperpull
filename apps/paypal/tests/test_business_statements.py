@@ -282,20 +282,44 @@ def test_a_monthly_and_a_custom_statement_ending_the_same_day_are_both_filed(
 
 
 @pytest.mark.parametrize("refuse", [False, True], ids=["by default", "refusing"])
-def test_with_both_months_and_the_custom_listed_nothing_is_destroyed(
+def test_with_both_months_and_the_custom_listed_all_three_are_filed(
         business, tmp_path, monkeypatch, capsys, refuse):
-    """The custom statement's first day is July's and its last day August's,
-    so nothing of its own is left to tell it by, and the July day among its
-    transactions reads as July's. It waits in Manual Review, and both
-    monthly statements are filed. With refuse_wrong_documents set it was
-    destroyed, refused with nothing of its own ever checked."""
+    """The custom statement's first day is July's and its last day August's.
+    Checked against August's, which ends on its day, its first day tells
+    them apart, and checked again against July's, which ends on another,
+    its last day does, so it is filed beside both. Asked of the whole list
+    at once, both its days were another statement's too and nothing of it
+    was left to tell it by, so it waited in Manual Review every time, and
+    with refuse_wrong_documents set it was once destroyed."""
     fake, context = business
     _with_custom(fake, B.ACCOUNT_ID + "1", B.ACCOUNT_ID + "4")
     said, result, _ = _run(monkeypatch, context, tmp_path, "--all", "--yes", capsys=capsys,
                            cfg={"refuse_wrong_documents": refuse})
+    assert B.statements(tmp_path) == {**B.FILED, B.CUSTOM_FILED: B.CUSTOM}, said
+    assert B.statements(tmp_path, "Manual Review") == {}
+    assert not result["manual_review"] and not result["wrong_document"]
+
+
+@pytest.mark.parametrize("came", ["july", "august"])
+@pytest.mark.parametrize("refuse", [False, True], ids=["by default", "refusing"])
+def test_with_both_months_listed_a_month_handed_over_in_the_custom_row_is_not_filed(
+        business, tmp_path, monkeypatch, capsys, refuse, came):
+    """August's statement in the custom row names August's first day, which
+    the check against the statements ending on its day refuses. July's
+    names the custom one's first day too, and July's last day, which the
+    check again against those ending on other days refuses."""
+    fake, context = business
+    _with_custom(fake, B.ACCOUNT_ID + "1", B.ACCOUNT_ID + "4")
+    fake.served[B.CUSTOM_ID] = {"july": B.JULY, "august": B.AUGUST}[came]
+    said, result, _ = _run(monkeypatch, context, tmp_path, "--all", "--yes", capsys=capsys,
+                           cfg={"refuse_wrong_documents": refuse})
     assert B.statements(tmp_path) == B.FILED, said
-    assert B.statements(tmp_path, "Manual Review") == {B.CUSTOM_FILED: B.CUSTOM}
-    assert result["manual_review"] == 1 and not result["wrong_document"]
+    if refuse:
+        assert B.statements(tmp_path, "Manual Review") == {}
+        assert result["wrong_document"] == 1
+    else:
+        assert list(B.statements(tmp_path, "Manual Review")) == [B.CUSTOM_FILED]
+        assert result["manual_review"] == 1
 
 
 # -- a statement ending on the same day as another ----------------------------------

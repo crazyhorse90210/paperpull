@@ -28,6 +28,23 @@ All notable changes to PaperPull are recorded here. Versioning follows
   when the statements list answered. Tax forms are not covered yet.
 
 ### Fixed
+- **Navy Federal, Costco and PayPal check a saved document against each
+  kind of document it could be taken for apart.** The check that a saved
+  PDF is the one asked for counts only what no other listed document
+  shares. Navy Federal asked it once, against the other account's
+  statement of the same day, which shares the day, and the account's own
+  statements either side, which share the account, so on a day both
+  accounts are billed neither counted and the statement was filed
+  unchecked. Now each statement is checked against the other accounts'
+  of its day, then again against its own account's either side, which
+  catches another month of the same account on such a day. On the
+  maintainer's 64 statements every one is still filed, and 120 of 124
+  swaps with the month either side are caught where one check caught 95.
+  Costco did the same with a receipt that shares its day with one
+  purchase and its total with another day's, and PayPal with a custom
+  statement whose first day is one statement's and last day another's,
+  which now is filed when both its days check out instead of waiting in
+  Manual Review every time. A core census holds every app to it.
 - **Wells Fargo, SBA and American Family read a document's button drawn as
   an input like any other button.** The core finds a document's button by
   its role and its name, and a page can draw one as an `<input>` of type

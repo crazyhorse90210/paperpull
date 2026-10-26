@@ -747,10 +747,16 @@ class App:
     def _business_rivals(self, ref) -> tuple:
         """The business statements listed beside this one, the ones a wrong
         document would most likely be, so its check compares the rows it
-        could be confused with (identity.rivals_for)."""
+        could be confused with, in two groups, since each differs from it by
+        another fact. Those ending on its last day differ by their first
+        day, and those either side ending on other days (identity.rivals_for)
+        differ by their last day. A custom statement over July and August
+        shares its first day with July's and its last day with August's, and
+        asked together both days would stop counting, and nothing of it would
+        be left to tell it by."""
         mine = ref.identity()
         if mine is None:
-            return ()
+            return (), ()
         listed = []
         for rec in self.discovery.data.values():
             other = site.business_ref((rec or {}).get("href", ""))
@@ -759,8 +765,11 @@ class App:
                 listed.append(known)
         listed.sort(key=lambda known: known.date)
         if mine not in listed:
-            return ()
-        return identity.rivals_for(listed, listed.index(mine))
+            return (), ()
+        same_day = [known for known in listed if known != mine and known.date == mine.date]
+        near = [known for known in identity.rivals_for(listed, listed.index(mine))
+                if known.date != mine.date]
+        return same_day, near
 
     def _take_business(self, page, doc: Document, ref, out_path) -> Optional[bool]:
         """One business statement, pressed for in its own row and taken by the
@@ -780,7 +789,10 @@ class App:
                 print("     then press Resume to carry on.")
                 self._record(doc, State.DISCOVERED, notes="Session expired before download")
             raise why
-        rivals = self._business_rivals(ref)
+        same_day, near = self._business_rivals(ref)
+        # Checked against the statements ending on its last day, or with none,
+        # against those either side ending on other days.
+        rivals = same_day or near
         request, why = site.statement_request(page, ref, view, rivals=rivals)
         if request is None:
             self._record(doc, State.NEEDS_MANUAL_REVIEW,
@@ -809,9 +821,18 @@ class App:
         print("  %s" % got.say())
         if not got.ok:
             return False
-        verdict = got.verdict.outcome if got.verdict is not None else identity.UNCHECKED
+        told = got.verdict
+        if told is not None and told.outcome == identity.VERIFIED and same_day and near:
+            # Then again against those ending on other days, so its last day is
+            # checked even when the check against those ending on its day told
+            # it apart by its first day alone. With nothing either side the
+            # first day found already passes the plain check of its days.
+            told = identity.distinguish(out_path, request.expect, near)
+            self.journal.op("verify", "check the statement again", outcome=told.outcome,
+                            checked=len(told.checked), matched=len(told.matched))
+        verdict = told.outcome if told is not None else identity.UNCHECKED
         if verdict == identity.REFUSED:
-            if self._destroyed(out_path, got.verdict):
+            if self._destroyed(out_path, told):
                 why = "the statement that came does not name the days it was listed under"
                 doc.pdf_path = doc.pdf_filename = ""
                 self._record(doc, State.NEEDS_MANUAL_REVIEW, notes=why)
@@ -822,13 +843,13 @@ class App:
                 print("  Nothing was saved for it. The file was destroyed rather")
                 print("  than filed under this statement's name.")
             else:
-                self._to_review(doc, out_path, REFUSED_NOTE, got.verdict)
+                self._to_review(doc, out_path, REFUSED_NOTE, told)
             return None
         if verdict != identity.VERIFIED:
-            self._to_review(doc, out_path, UNCHECKED_NOTE, got.verdict)
+            self._to_review(doc, out_path, UNCHECKED_NOTE, told)
             return None
-        if self._ties_one_ending_the_same_day(out_path, request.expect, rivals):
-            self._to_review(doc, out_path, TIED_NOTE, got.verdict)
+        if self._ties_one_ending_the_same_day(out_path, request.expect, same_day):
+            self._to_review(doc, out_path, TIED_NOTE, told)
             return None
         return True
 
@@ -836,11 +857,12 @@ class App:
         """With refuse_wrong_documents set, a statement whose text names
         another statement's days better than its own is not kept at all, as
         in every other app that checks, but only when it had a day of its
-        own to be checked by (Verdict.checked). One whose first and last day
-        are both other statements' days too had nothing of its own to count,
-        so nothing says it is not this one, and it goes to Manual Review even
-        then. True when it was removed. Nothing is written down here, since
-        the caller writes the statement down once, whichever way it went."""
+        own to be checked by (Verdict.checked). Each check leaves it one of
+        its days (_business_rivals), and one that had nothing of its own to
+        count all the same goes to Manual Review even then, since nothing
+        says it is not this one. True when it was removed. Nothing is
+        written down here, since the caller writes the statement down once,
+        whichever way it went."""
         if not self.config.get("refuse_wrong_documents", False):
             return False
         if verdict is None or not verdict.checked:
