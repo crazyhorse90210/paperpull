@@ -318,6 +318,13 @@ All notable changes to PaperPull are recorded here. Versioning follows
   stops at its end rather than finish, and Resume reads the list again. A
   year that is turned off is never chosen. Target's history page shows no
   such filter today, so this holds for a page that brings one back.
+- **Fairfax Water's and Affirm's COMMANDS.txt describe their own app.**
+  Both were cut from a retirement plan's, so each said it downloads
+  participant statements and a 1099-R, never moves money between funds,
+  and files under Tax Documents\. Fairfax Water's now says it downloads
+  water bills, and Affirm's that it downloads one loan agreement per loan,
+  each with what its guard refuses and the folder its files go in. The
+  commands in them were right and are unchanged.
 
 ## [0.58.0] - 2026-10-24
 
