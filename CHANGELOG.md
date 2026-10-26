@@ -48,6 +48,54 @@ All notable changes to PaperPull are recorded here. Versioning follows
   the other shapes were found while fixing them, each proven in a browser
   before the change. The statements a tester's recordings show for Wells
   Fargo and American Family are links, which this leaves as they read.
+- **Wells Fargo reads a masked number and the part around a link the way
+  SBA and American Family do.** 0.58.0 gave the three apps one reading of
+  what a document is, but the two fixes the fresh review of SBA's and
+  American Family's copy found reached only those two. On Wells Fargo, in
+  0.58.0 as in 0.57.1, a statement whose masked number runs into the
+  control's own words, as two spans touching draw
+  `Checking ****1099View statement`, was filed as a Tax Document, since any
+  letter after the digits was taken for a form's name. And a 1099-INT whose
+  button names only its date, beside the form's name and a hidden field of
+  a form, an empty anchor or a control shown only on hover, was filed as an
+  Account Statement, since the part read around the button stopped at that
+  control. Now only a form's own letters after the digits, as in 1099-B or
+  1099INT, make them a form's number, and the part read around a link stops
+  only at a control drawn on the page, so both are left for a person,
+  counted in Diagnose. A document is still filed only where the reading
+  without the two rules agrees. The test that holds SBA's and American
+  Family's copies of this reading alike now holds Wells Fargo's too, its
+  whole reader compared with SBA's.
+  Found by the fresh review of the SBA and American Family port and proven
+  in a browser before the change. The statement links a tester's recording
+  shows name their own kind and date, which neither shape touches.
+- **Wells Fargo, SBA and American Family leave two more look-alike
+  statements for a person.** A statement whose link names only an account's
+  masked number ending 1099 and its date, as
+  `Checking ****1099 01/31/2026 PDF` does, under a heading or beside words
+  that name tax documents, was filed as a Tax Document, in 0.58.0 as in
+  0.57.1. The two readings without the rule for masked digits took the
+  digits for the form, and the careful reading took its kind from the tax
+  words around the link, so all three agreed. And a masked number running
+  into E-Statement or E-Bill, as in `Checking ****1099E-Statement` or
+  `Policy ****1099-E-Bill`, was read as a form's name, since E is a form's
+  letter, as in 1098-E. A form's letter with a dash and a letter after it
+  now starts another word. A masked number's last digits now never decide
+  a kind either way. A control whose kind the careful reading finds only by
+  reading past such digits, in its own words or in the words around it, is
+  left for a person, counted in Diagnose and held as the kind the other
+  readings filed it as, so the day's real 1099 beside the first statement
+  is still refused as its twin. That also leaves for a person a 1099 named
+  after a bullet beside a link naming only its date, which 0.58.0 filed as
+  a statement. The fresh review of this change found that the dash rule
+  alone did the same to a 1099-R named "1099-R-IRA distribution" after a
+  bullet. The change is the same in all three apps, and the test
+  that holds their readers alike holds it. Found by the fresh review of the
+  Wells Fargo change above and proven in a browser before the change. The
+  statement links a tester's recording shows name their own kind and date,
+  so neither shape touches them. A form whose link names only a masked
+  number and its date, and a link naming only its date beside a masked
+  number, are now left for a person even where the row names the form.
 
 ## [0.58.0] - 2026-10-24
 
