@@ -12,20 +12,25 @@ All notable changes to PaperPull are recorded here. Versioning follows
 ### Added
 - **Bank of America downloads statements (#121).** Checking, savings and
   credit card statements from Statements & Documents, built from the two
-  recordings @appchamp made, one trip to a checking statement and one to
-  a card's, and not run on an account yet. Sign in, open Statements &
-  Documents and leave the window there. The app reloads that page,
-  keeps the list call the page makes, and asks every account's
-  statements the same way from inside the page, year by year. It learns
-  the form of the page's own Download PDF links and asks for each
-  statement at its own address in that form. Nothing is pressed. A
-  statement is filed only when its text names its own day and account
-  better than the other accounts' statements of that day and its own
-  account's either side of it, and anything else goes to Manual Review.
-  A file the bank names for another day is never filed. A page that does
-  not answer the way the recordings showed stops the run with a failure
-  file of counts rather than a guess. Login says you are signed in only
-  when the statements list answered. Tax forms are not covered yet.
+  recordings @appchamp made, one trip to a checking statement and one to a
+  card's. His first run listed every statement and saved none, so it is
+  still untested. Sign in, open Statements & Documents and leave the
+  window there. The app reloads that page, keeps the list call the page
+  makes, and asks every account's statements the same way from inside the
+  page, year by year. The reload leaves the page's Statements heading
+  shut, with no Download PDF link drawn under it, which is where his run
+  stopped, so before it downloads, the app opens that heading, the one
+  press it makes. It learns the form of the page's own Download PDF links
+  and asks for each statement at its own address in that form. A statement
+  is filed only when its text names its own day and account better than
+  the other accounts' statements of that day and its own account's either
+  side of it, and anything else goes to Manual Review. A file the bank
+  names for another day is never filed. A page that does not answer the
+  way the recordings showed stops the run with a failure file of counts
+  rather than a guess. Login says you are signed in only when the
+  statements list answered. With several Bank of America tabs open, the
+  run works in the one on Statements & Documents, and stops when more
+  than one is there. Tax forms are not covered yet.
 
 ### Fixed
 - **Wells Fargo, SBA and American Family read a document's button drawn as

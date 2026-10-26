@@ -6,20 +6,24 @@ delete-safe, and part of [PaperPull](../../README.md).
 
 **UNTESTED.** Built on 2026-10-25 from two recordings a tester made on
 [issue #121](https://github.com/rheeloaded/paperpull/issues/121), one trip
-to a checking statement and one to a credit card statement, and not run on
-an account yet. If you bank with Bank of America, a Pilot run tells whether
-it works, see below. Tax forms are not covered yet.
+to a checking statement and one to a credit card statement. Its first run
+on an account, on 2026-10-26, listed every statement and saved none, since
+the page drew no Download PDF link until its Statements heading was opened,
+which the app now does. If you bank with Bank of America, a Pilot run tells
+whether it works, see below. Tax forms are not covered yet.
 
 ## How it reads the site
 
 Statements & Documents fills its list from a call of its own, one account
-and one year at a time, and draws a Download PDF link for each statement.
-The app reloads that page, keeps the list call the page makes, and
-asks every account's statements the same way from inside the page, year by
-year, at a person's pace, and reloads the page again only when what it
-heard is five minutes old, in a long run. It learns the form of the page's
-own Download PDF links and asks for each statement at its own address in
-that form. Nothing on the page is pressed.
+and one year at a time, and draws a Download PDF link for each statement
+under its Statements heading. The app reloads that page, keeps the list
+call the page makes, and asks every account's statements the same way from
+inside the page, year by year, at a person's pace, and reloads the page
+again only when what it heard is five minutes old, in a long run. A reload
+leaves the Statements heading shut, with no link drawn under it, so before
+it downloads, the app opens that heading, the one press it makes. It learns
+the form of the page's own Download PDF links and asks for each statement
+at its own address in that form.
 
 A statement is filed only when its text names its own day and account
 better than any statement it could be taken for, the other accounts'
@@ -64,16 +68,20 @@ Sign-in uses your own installed Edge or Chrome, in a separate profile. You
 sign in yourself, answer your own code, and leave the window open. The app
 never sees your password. Login says you are signed in only when the
 statements list answered, so it asks you to open Statements & Documents
-first.
+first. With other Bank of America tabs open, it works in the one on
+Statements & Documents, and with more than one there it stops and asks you
+to close the others.
 
 ## Safety
 
-Bank of America moves money, through transfers, Zelle and bill pay. This
-app presses nothing on the bank's pages at all. It reloads Statements &
+Bank of America moves money, through transfers, Zelle and bill pay. The
+one control this app presses is the Statements heading of Statements &
+Documents, when the page shows it shut and a statement is to be downloaded,
+and only a button whose whole name is Statements, with nothing drawn over
+it. Login and Discover press nothing. It reloads Statements &
 Documents to hear its list, at the start and every five minutes of a long
-run, and asks for lists and PDFs from inside
-the signed-in page the way the page itself does, every address on
-`bankofamerica.com`. Login opens the home page in a tab of its own only
+run, and asks for lists and PDFs from inside the signed-in page the way the
+page itself does, every address on `bankofamerica.com`. Login opens the home page in a tab of its own only
 when no tab of yours is on the site. An expired session stops the run
 rather than reporting an empty success.
 

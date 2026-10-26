@@ -2,7 +2,9 @@
 it, read through a stand-in page (standin_bank). The list call and the PDF
 links are learned from the page itself, every account and year is asked
 for the way the page asks, and anything that does not fit stops the run
-rather than being guessed at. Nothing is pressed. Every value is invented."""
+rather than being guessed at. The one press is the Statements heading, when
+the page leaves it shut, and paperpull_core.pressing.click is the stand-in's
+own here (standin_bank.press). Every value is invented."""
 import sys
 from pathlib import Path
 
@@ -14,11 +16,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import storage  # noqa: F401  binds this provider's AppSpec
 import bofa_site as site
 import standin_bank as sb
+from paperpull_core import pressing
 
 
 @pytest.fixture(autouse=True)
-def fresh():
+def fresh(monkeypatch):
     site.forget()
+    monkeypatch.setattr(pressing, "click", sb.press)
     yield
     site.forget()
 
@@ -313,6 +317,269 @@ def test_a_link_off_the_site_is_never_read():
     page.links = [{"name": "Download PDF for January Statement for Everyday Checking",
                    "href": "https://evil.test/getpdf?doc=DOC000000000101"}]
     assert site.download_links(page) == []
+
+
+# -- the Statements heading ------------------------------------------------------
+
+def pressed(page):
+    return [a for a in page.asked if a[0] in sb.PRESSES]
+
+
+def test_a_shut_statements_heading_is_opened_once_and_its_links_learned():
+    """appchamp's first real run (#121, 2026-10-26). The reload left the
+    Statements heading shut, the page drew no Download PDF link, and every
+    statement stopped with nothing saved. Opening it is the press both
+    recordings made first."""
+    page = sb.Bank(heading="shut")
+    call = site.learn(page)
+    assert pressed(page) == [("click", "the Statements heading")]
+    assert call.template is not None and call.links == 2
+    assert call.facts["statements_heading"] == "opened" and call.facts["times_the_list_was_read"] == 2
+    data, day = site.document_bytes(page, account_ref="K-BRAVO-0002", date="2026-01-15",
+                                    document_id="DOC000000000201", year="2026")
+    assert data.startswith(b"%PDF") and day == "2026-01-15"
+    assert pressed(page) == [("click", "the Statements heading")], "the heading was pressed again"
+    assert not page.listeners, "the listener was left on the page"
+
+
+def test_the_rows_the_heading_draws_are_learned_from_its_own_answer():
+    """The reload's own answer listed other rows (appchamp's listed 7 and
+    then 1), so the links are matched to the rows of every answer heard."""
+    page = sb.Bank(heading="shut")
+    page.listed = sb.answer([sb.row("DOC000000000777", sb.ACCOUNTS[0], "2026-03-01",
+                                    "Tax Form", category="CAT-TAX")])
+    page.opened = sb.answer(sb.STATEMENTS[("K-ALPHA-0001", "2026")])
+    call = site.learn(page)
+    assert call.template is not None and call.facts["rows_read"] == 3
+
+
+def test_an_open_heading_is_never_pressed():
+    page = sb.Bank()
+    page.links = []
+    call = site.learn(page)
+    assert not pressed(page) and call.facts["statements_heading"] == "already expanded"
+    with pytest.raises(site.NotLearned) as stopped:
+        site.document_bytes(page, account_ref="K-ALPHA-0001", date="2026-01-15",
+                            document_id="DOC000000000101", year="2026")
+    assert "even with its Statements heading open" in str(stopped.value)
+    assert stopped.value.facts["pdf_links"] == 0 and not page.pdfs
+
+
+@pytest.mark.parametrize("how,state", [
+    (dict(heading=None), "not found"),
+    (dict(heading="several"), "several"),
+    (dict(heading="shut", controls=""), "refused"),
+    (dict(heading="shut", title="Pay your bill"), "refused"),
+    (dict(heading="shut", label="Statements & Documents"), "refused"),
+])
+def test_a_heading_that_is_not_the_one_is_never_pressed(how, state):
+    """No heading, two of the name, one that names no list it opens, or one
+    with a label the guard refuses. Nothing is pressed and nothing guessed."""
+    page = sb.Bank(heading=how["heading"])
+    for name in ("controls", "title", "label"):
+        if name in how:
+            setattr(page.heading_el, name, how[name])
+    call = site.learn(page)
+    assert not pressed(page) and call.template is None
+    assert call.facts["statements_heading"] == state
+    with pytest.raises(site.NotLearned) as stopped:
+        site.document_bytes(page, account_ref="K-ALPHA-0001", date="2026-01-15",
+                            document_id="DOC000000000101", year="2026")
+    assert "could not be opened (%s)" % state in str(stopped.value)
+
+
+def test_the_heading_guard_takes_the_whole_name_only():
+    assert site.is_statements_heading("Statements") and site.is_statements_heading(" Statements ")
+    for name in ("Statements & Documents", "Request statements", "Statements and pay",
+                 "Tax Documents", "", "statement"):
+        assert not site.is_statements_heading(name), name
+    assert site.is_statements_heading in site.PRESS_GUARDS
+
+
+def test_links_that_hide_their_address_are_counted_and_not_guessed():
+    """A link whose address is a script and whose statement's id sits only
+    in a data- field, the shape a page has when a script of its own opens
+    the PDF. The stop says so in counts, and nothing is asked for."""
+    page = sb.Bank()
+    page.links = [{"name": "Download PDF for January Statement for Everyday Checking",
+                   "href": "javascript:void(0)", "raw": "javascript:void(0)",
+                   "data": ["x", "DOC000000000101"]},
+                  {"name": "Download PDF for February Statement for Everyday Checking",
+                   "href": sb.PAGE_URL + "#", "raw": "#", "data": ["DOC000000000102"]}]
+    call = site.learn(page)
+    assert call.template is None and not pressed(page)
+    with pytest.raises(site.NotLearned) as stopped:
+        site.document_bytes(page, account_ref="K-ALPHA-0001", date="2026-01-15",
+                            document_id="DOC000000000101", year="2026")
+    assert "do not show the address of their statement" in str(stopped.value)
+    facts = stopped.value.facts
+    assert (facts["pdf_links"], facts["links_to_no_page"], facts["links_to_this_page"],
+            facts["links_with_an_id"], facts["links_with_an_id_elsewhere"]) == (2, 1, 1, 0, 2)
+    assert not page.pdfs
+    said = repr(facts)
+    for value in ("DOC000000000101", "javascript", "K-ALPHA-0001", "Everyday Checking"):
+        assert value not in said, value
+
+
+def test_a_heading_shut_again_by_a_later_reload_is_opened_again():
+    """A long run hears the page again after FRESH_SECONDS, and that reload
+    shuts the heading as the first one did."""
+    page = sb.Bank(heading="shut")
+    site.learn(page)
+    site.learn(page)
+    assert pressed(page) == [("click", "the Statements heading")] * 2 and page.reloads == 2
+
+
+def test_listing_alone_presses_nothing_and_a_download_then_opens_the_heading():
+    """Login and Discover only list, and a list needs no PDF link. The first
+    statement asked for hears the page again, with the heading opened."""
+    page = sb.Bank(heading="shut")
+    rows = site.collect_documents(page)
+    assert len(rows) == 4 and not pressed(page)
+    assert site.learned(page).facts["statements_heading"] == "not pressed"
+    data, _day = site.document_bytes(page, account_ref="K-ALPHA-0001", date="2026-01-15",
+                                     document_id="DOC000000000101", year="2026")
+    assert data.startswith(b"%PDF")
+    assert pressed(page) == [("click", "the Statements heading")] and page.reloads == 2
+
+
+def test_a_statement_both_answers_list_is_matched_to_the_row_it_was_drawn_from():
+    """The reload's answer and the press's both list January, with another
+    value in a field the link carries. The link was drawn from the press's
+    row, so that field is part of the form and not the reload's value."""
+    page = sb.Bank(heading="shut")
+    jan = sb.STATEMENTS[("K-ALPHA-0001", "2026")][0]
+    page.listed = sb.answer([dict(jan, source="SRCFROMRELOAD")])
+    page.opened = sb.answer([dict(jan, source="SRCFROMPRESS")])
+    page.links = [{"name": "Download PDF for January Statement for Everyday Checking",
+                   "href": sb.LINK_BASE + jan["docId"] + "&s=SRCFROMPRESS"}]
+    call = site.learn(page)
+    assert call.template == sb.LINK_BASE + "\x00docId\x00&s=\x00source\x00"
+
+
+def test_a_press_answer_heard_after_the_rows_are_drawn_is_waited_for():
+    page = sb.Bank(heading="shut")
+    page.press_answer = "late"
+    page.listed = sb.answer([sb.row("DOC000000000777", sb.ACCOUNTS[0], "2026-03-01", "Tax Form",
+                                    category="CAT-TAX")])
+    page.opened = sb.answer(sb.STATEMENTS[("K-ALPHA-0001", "2026")])
+    call = site.learn(page)
+    assert call.template is not None and call.facts["list_read_after_the_heading"] is True
+
+
+def test_a_press_whose_list_is_never_heard_says_so():
+    page = sb.Bank(heading="shut")
+    page.press_answer = "never"
+    page.listed = sb.answer([sb.row("DOC000000000777", sb.ACCOUNTS[0], "2026-03-01", "Tax Form",
+                                    category="CAT-TAX")])
+    page.opened = sb.answer(sb.STATEMENTS[("K-ALPHA-0001", "2026")])
+    call = site.learn(page)
+    assert call.template is None and call.facts["list_read_after_the_heading"] is False
+    with pytest.raises(site.NotLearned) as stopped:
+        site.document_bytes(page, account_ref="K-ALPHA-0001", date="2026-01-15",
+                            document_id="DOC000000000101", year="2026")
+    assert "did not hear it ask for" in str(stopped.value)
+    assert stopped.value.reason == "the list was not read after the heading"
+
+
+def test_a_sign_in_answer_to_the_press_is_a_session_that_ended():
+    page = sb.Bank(heading="shut")
+    page.press_status = 401
+    with pytest.raises(site.SessionExpired):
+        site.learn(page)
+    assert not page.listeners
+
+
+@pytest.mark.parametrize("title", ["Opt in to eStatements", "Turn on Statements",
+                                   "Sign in to Statements"])
+def test_a_heading_with_a_settings_or_sign_in_label_is_never_pressed(title):
+    """Words the blocklist itself lets through and the settings and sign-in
+    lists refuse, as is_safe_control does."""
+    assert not site.FORBIDDEN_CONTROL_RE.search(title)
+    page = sb.Bank(heading="shut")
+    page.heading_el.title = title
+    call = site.learn(page)
+    assert not pressed(page) and call.facts["statements_heading"] == "refused"
+
+
+def test_a_heading_the_page_opened_itself_meanwhile_is_not_pressed_shut():
+    page = sb.Bank(heading="shut")
+    el = page.heading_el
+    real = el.get_attribute
+    el.get_attribute = lambda name: "true" if name == "aria-expanded" else real(name)
+    call = site.learn(page)
+    assert not pressed(page) and call.facts["statements_heading"] == "already expanded"
+
+
+def test_a_tab_that_left_the_statements_page_is_not_pressed_in(monkeypatch):
+    page = sb.Bank(heading="shut")
+    asked = []
+    real = site.on_statements_page
+
+    def moves_away(p):
+        asked.append(1)
+        return real(p) and len(asked) < 2
+    monkeypatch.setattr(site, "on_statements_page", moves_away)
+    with pytest.raises(site.NotThere):
+        site.learn(page)
+    assert not pressed(page) and not page.listeners
+
+
+def test_a_link_that_matches_no_listed_statement_takes_no_form():
+    """Every link the page drew comes out of the one form, or none is taken."""
+    page = sb.Bank()
+    jan = sb.STATEMENTS[("K-ALPHA-0001", "2026")][0]
+    page.links = [{"name": "Download PDF for January Statement for Everyday Checking",
+                   "href": sb.LINK_BASE + jan["docId"]},
+                  {"name": "Download PDF for March Statement for Everyday Checking",
+                   "href": sb.LINK_BASE + "DOC000000000999"}]
+    call = site.learn(page)
+    assert call.template is None and call.facts["links_with_no_row"] == 1
+    with pytest.raises(site.NotLearned) as stopped:
+        site.document_bytes(page, account_ref="K-ALPHA-0001", date="2026-01-15",
+                            document_id="DOC000000000101", year="2026")
+    assert stopped.value.reason == "pdf links with no row"
+
+
+def test_links_the_page_drew_on_its_own_are_read_and_nothing_pressed():
+    """The heading is pressed only for want of a link. A page that drew its
+    Download PDF links, with the heading shut or open, is never pressed."""
+    page = sb.Bank(heading="shut")
+    page.links_while_shut = True
+    call = site.learn(page)
+    assert not pressed(page) and call.template is not None
+    assert call.facts["statements_heading"] == "not pressed"
+
+
+def test_every_fact_a_survey_writes_keeps_its_name_and_words():
+    """Diagnose writes its file through the word list, and a name or a word
+    off it comes out as its shape (links_to_a_mark was links_to_a_aaaa)."""
+    from paperpull_core.words import shape_tree
+    page = sb.Bank(heading="shut")
+    call = site.learn(page)
+    for key, value in call.facts.items():
+        assert shape_tree(key) == key, key
+        if isinstance(value, str):
+            assert shape_tree(value) == value, value
+    for state in ("already expanded", "opened", "not found", "several", "refused",
+                  "not pressed", "expand the statements heading", "download a statement"):
+        assert shape_tree(state) == state, state
+
+
+def test_every_reason_the_failure_file_gets_is_one_it_keeps():
+    from paperpull_core.words import shape_tree
+    from paperpull_core.failure import _step
+    cases = [dict(pdf_links=0, statements_heading="opened"),
+             dict(pdf_links=0, statements_heading="not found"),
+             dict(pdf_links=2, forms=0, statements_heading="opened",
+                  list_read_after_the_heading=False),
+             dict(pdf_links=2, forms=0), dict(pdf_links=2, forms=2),
+             dict(pdf_links=2, forms=1, links_with_no_row=1), dict(pdf_links=2, forms=1)]
+    for facts in cases:
+        _why, reason = site.not_learned_why(facts)
+        assert _step(reason) == reason and shape_tree(reason) == reason, reason
+    for key in site.link_facts([], []):
+        assert shape_tree(key) == key, key
 
 
 # -- one statement's PDF --------------------------------------------------------

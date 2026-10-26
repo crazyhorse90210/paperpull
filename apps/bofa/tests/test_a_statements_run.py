@@ -3,7 +3,9 @@
 statement only when its text names its own day and account better than any
 it could be taken for, and everything else is kept in Manual Review or not
 kept at all. Login says a session is signed in only when the list answered.
-Nothing is pressed. Every value is invented."""
+The one press is the Statements heading, when the page leaves it shut, and
+paperpull_core.pressing.click is the stand-in's own here (standin_bank.press).
+Every value is invented."""
 import json
 import sys
 from pathlib import Path
@@ -17,7 +19,7 @@ import storage  # noqa: F401  binds this provider's AppSpec
 import bofa_docs as app_mod
 import bofa_site as site
 import standin_bank as sb
-from paperpull_core import delivery, testkit
+from paperpull_core import delivery, pressing, testkit
 from paperpull_core.run_reporting import PREFIX
 
 INVENTED = ("K-ALPHA-0001", "K-BRAVO-0002", "DOC000000000101", "TOKEN-T", "STANDINTOKEN",
@@ -25,8 +27,9 @@ INVENTED = ("K-ALPHA-0001", "K-BRAVO-0002", "DOC000000000101", "TOKEN-T", "STAND
 
 
 @pytest.fixture(autouse=True)
-def fresh():
+def fresh(monkeypatch):
     site.forget()
+    monkeypatch.setattr(pressing, "click", sb.press)
     yield
     site.forget()
 
@@ -166,6 +169,80 @@ def test_pilot_files_each_statement_that_names_its_own_day_and_account(tmp_path,
     assert sorted(bank.pdfs) == sorted(sb.LINK_BASE + d for d in (
         "DOC000000000091", "DOC000000000101", "DOC000000000102", "DOC000000000201"))
     no_presses(bank)
+
+
+def test_pilot_on_a_page_whose_reload_shuts_the_statements_heading_files_its_statements(
+        tmp_path, bank, capsys):
+    """appchamp's first real run (#121, 2026-10-26). Discover listed every
+    statement, then Pilot and Resume each stopped on the first one because
+    the reload left the Statements heading shut and no Download PDF link was
+    drawn. The heading is opened once, the way both recordings opened it."""
+    bank.heading = bank.heading_on_reload = "shut"
+    assert run(tmp_path, "--pilot", "--max-docs", "1") == 0
+    saved = [p.name for p in (tmp_path / "out" / "Statements").glob("*.pdf")]
+    assert saved == ["2026-02-15 Bank of America Statement - Everyday Checking.pdf"]
+    assert [a for a in bank.asked if a[0] in sb.PRESSES] == [("click", "the Statements heading")]
+    assert not [a for a in bank.asked if a[0] == "goto"]
+    # Discover listed without it, and the download heard the page again.
+    assert bank.reloads == 2
+
+
+def test_discover_and_login_on_a_shut_heading_press_nothing(tmp_path, bank, capsys):
+    """A list needs no PDF link. appchamp's Discover listed every statement
+    with the heading shut, and still does, pressing nothing."""
+    bank.heading = bank.heading_on_reload = "shut"
+    assert run(tmp_path, "--discover") == 0
+    raw = capsys.readouterr().out
+    assert result(raw)["stopped"] == 0 and len(records(tmp_path, "discovery.json")) == 4
+    assert run(tmp_path, "--login") in (0, None)
+    assert "Success: the statements list answered, with 2 account(s)." in capsys.readouterr().out
+    no_presses(bank)
+
+
+def test_a_page_whose_links_hide_their_address_stops_with_its_counts(tmp_path, bank, capsys):
+    """What the failure file says when no form can be learned, so the next
+    round knows why. Counts and fixed words only, never an address."""
+    bank.heading = bank.heading_on_reload = "shut"
+    bank.opened = sb.answer(sb.STATEMENTS[("K-ALPHA-0001", "2026")])
+    bank.links = [{"name": "Download PDF for January Statement for Everyday Checking",
+                   "href": "javascript:void(0)", "raw": "javascript:void(0)",
+                   "data": ["DOC000000000101"]}]
+    assert run(tmp_path, "--pilot", "--max-docs", "1") == ("exit", 0)
+    out = " ".join(capsys.readouterr().out.split())
+    assert "do not show the address of their statement" in out and "#121" in out
+    (written,) = list((tmp_path / "out" / "Diagnostics").glob("failure-*.json"))
+    report = json.loads(written.read_text(encoding="utf-8"))
+    assert report["step"] == "download a statement"
+    assert report["reason"] == "no statement id in the pdf links"
+    said = report["extra"]["postmortem"]
+    assert said["statements_heading"] == "opened" and said["pdf_links"] == 1
+    assert said["links_to_no_page"] == 1 and said["links_with_an_id_elsewhere"] == 1
+    assert said["links_with_an_id"] == 0 and said["times_the_list_was_read"] == 2
+    text = written.read_text(encoding="utf-8")
+    for value in INVENTED + ("Everyday Checking", "Dana", "javascript"):
+        assert value not in text, value
+    assert not bank.pdfs and not list((tmp_path / "out").rglob("*.pdf"))
+
+
+def test_something_over_the_statements_heading_stops_the_run(tmp_path, bank, capsys, monkeypatch):
+    """A press the core will not make, a chat bubble over the heading say,
+    stops the run with the stop said and a failure file of its facts."""
+    bank.heading = bank.heading_on_reload = "shut"
+
+    def covered(page, el, *, css, what, words, step="press a control", **k):
+        raise pressing.Covered(step, "something on the page is over the control",
+                               ["Something on the page covers %s, so nothing was pressed." % what,
+                                pressing.AGAIN], {"verdict": "covered"})
+    monkeypatch.setattr(pressing, "click", covered)
+    assert run(tmp_path, "--pilot") == ("exit", 0)
+    raw = capsys.readouterr().out
+    assert "covers the Statements heading, so nothing was pressed" in " ".join(raw.split())
+    (written,) = list((tmp_path / "out" / "Diagnostics").glob("failure-*.json"))
+    report = json.loads(written.read_text(encoding="utf-8"))
+    assert report["step"] == "expand the statements heading"
+    assert report["extra"]["verdict"] == "covered"
+    assert result(raw)["stopped"] == 1
+    assert not bank.pdfs and not list((tmp_path / "out").rglob("*.pdf"))
 
 
 JANUARY_CHECKING = "2026-01-15 Bank of America Statement - Everyday Checking.pdf"
@@ -404,3 +481,75 @@ def test_diagnose_writes_names_and_counts_and_never_the_owner_or_a_value(tmp_pat
     assert info["on_site"] is True and info["survey"]["list"]["accounts"] == 2
     assert "PDF links understood" in capsys.readouterr().out
     no_presses(page)
+
+
+# -- which tab -----------------------------------------------------------------
+
+OVERVIEW = "https://secure.bankofamerica.com/myaccounts/overview/?k=X"
+ELSEWHERE = "https://mail.example/inbox"
+
+
+class Browser:
+    """The person's browser as page() reaches it, with these tabs open."""
+
+    def __init__(self, *tabs):
+        self.pages = list(tabs)
+
+    def new_page(self):
+        raise AssertionError("a tab of the run's own was opened")
+
+
+def attached(monkeypatch, *tabs):
+    ctx = Browser(*tabs)
+
+    def browser(self):
+        self._cdp_mode = True
+        return ctx
+    monkeypatch.setattr(app_mod.App, "browser", browser)
+    monkeypatch.setattr(app_mod.App, "close", lambda self: None)
+    return ctx
+
+
+def an_app(tmp_path):
+    cfg = _config(tmp_path)
+    return app_mod.App(app_mod.build_parser().parse_args(["--discover", "--config", str(cfg)]))
+
+
+def test_the_tab_on_statements_and_documents_is_the_one_worked_in(tmp_path, monkeypatch):
+    """The first tab on the site used to be taken, so with the overview open
+    before Statements & Documents a run worked in the overview."""
+    overview, statements = sb.Bank(url=OVERVIEW), sb.Bank()
+    attached(monkeypatch, sb.Bank(url=ELSEWHERE), overview, statements)
+    assert an_app(tmp_path).page() is statements
+
+
+def test_a_tab_on_the_site_is_still_taken_when_none_is_on_the_statements_page(tmp_path, monkeypatch):
+    overview = sb.Bank(url=OVERVIEW)
+    attached(monkeypatch, sb.Bank(url=ELSEWHERE), overview)
+    assert an_app(tmp_path).page() is overview
+
+
+def test_two_tabs_on_statements_and_documents_take_neither(tmp_path, monkeypatch):
+    first, second = sb.Bank(), sb.Bank()
+    attached(monkeypatch, first, second)
+    app = an_app(tmp_path)
+    with pytest.raises(pressing.Stop) as stopped:
+        app.page()
+    assert stopped.value.step == "get the statements tab"
+    assert stopped.value.facts == {"tabs_on_the_statements_page": 2}
+    assert app._work_page is None
+
+
+def test_a_run_with_two_statements_tabs_stops_and_says_so(tmp_path, monkeypatch, capsys):
+    first, second = sb.Bank(), sb.Bank()
+    attached(monkeypatch, first, second)
+    assert run(tmp_path, "--pilot") == ("exit", 0)
+    raw = capsys.readouterr().out
+    assert "More than one Bank of America tab is on Statements & Documents" in " ".join(raw.split())
+    assert result(raw)["stopped"] == 1
+    (written,) = list((tmp_path / "out" / "Diagnostics").glob("failure-*.json"))
+    report = json.loads(written.read_text(encoding="utf-8"))
+    assert report["step"] == "get the statements tab"
+    assert report["reason"] == "several tabs are on the statements page"
+    for tab in (first, second):
+        assert tab.reloads == 0 and not tab.lists and not tab.pdfs and not tab.asked

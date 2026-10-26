@@ -15,13 +15,16 @@ Filters: --year YYYY  --start-date YYYY-MM-DD  --end-date YYYY-MM-DD
          --max-docs N
 
 Statements of checking, savings and credit card accounts, from Statements &
-Documents. Built from a tester's two recordings and not run on an account
-yet. Sign in, open Statements & Documents in that window, and leave it open.
+Documents. Built from a tester's two recordings, and its first run listed
+the statements and saved none. Sign in, open Statements & Documents in that
+window, and leave it open.
 
-READ-ONLY: this presses nothing on the bank's pages. It reloads the
-statements page to hear its list, at the start and every five minutes of a
-long run, and asks for lists and PDFs from
-inside the signed-in page the way the page itself does. It never pays,
+READ-ONLY: the one press is the statements page's Statements heading, when
+the page leaves it shut and a statement is to be downloaded, to open its
+list the way a person would. Login and Discover press nothing. It
+reloads the statements page to hear its list, at the start and every five
+minutes of a long run, and asks for lists and PDFs from inside the
+signed-in page the way the page itself does. It never pays,
 transfers money, sends money, or changes any account setting. Everything
 stays on this machine. Nothing is sent to any external service.
 
@@ -31,6 +34,7 @@ from __future__ import annotations
 
 from paperpull_core import failure
 from paperpull_core import listing
+from paperpull_core import pressing
 from paperpull_core import renaming
 from paperpull_core import saved_copy
 from paperpull_core import tabs
@@ -229,7 +233,24 @@ class App:
             # "provider.com.phish.example".
             live = [p for p in ctx.pages if not p.is_closed()]
             mine = [p for p in live if site.is_safe_url(p.url or "")]
-            self._work_page = mine[0] if mine else tabs.new_tab(ctx)
+            # Of those, the one on Statements & Documents, told by its
+            # address alone. The first tab on the site used to be taken,
+            # so with two open a run could work in the wrong one. With
+            # several on Statements & Documents, which one is meant cannot
+            # be told, so none is taken and nothing is asked of any.
+            listing = [p for p in mine if site.is_statements_address(p.url or "")]
+            if len(listing) > 1:
+                raise pressing.Stop(
+                    "get the statements tab", "several tabs are on the statements page",
+                    ["More than one Bank of America tab is on Statements & Documents, "
+                     "and which one you mean cannot be told, so nothing was asked of any.",
+                     "Close the others, leave one tab on Statements & Documents, and run "
+                     "this again."],
+                    {"tabs_on_the_statements_page": len(listing)})
+            if listing:
+                self._work_page = listing[0]
+            else:
+                self._work_page = mine[0] if mine else tabs.new_tab(ctx)
         else:
             self._work_page = ctx.pages[0] if ctx.pages else ctx.new_page()
         self.requests
@@ -295,7 +316,8 @@ class App:
         else:
             # The page did something the recordings did not show. Nothing
             # was guessed at, and the failure file says what, in counts.
-            self.write_failure(step, str(e))
+            self.write_failure(step, getattr(e, "reason", "") or str(e),
+                               postmortem=getattr(e, "facts", None) or None)
             lines = ["The statements page did not answer the way this app knows, "
                      "because %s. Nothing was guessed at and nothing was saved "
                      "for it. The failure file above says what the page did, as "
@@ -333,9 +355,10 @@ class App:
 
     def _look_at_the_list(self, page):
         """How many accounts the statements list answered with, or why it
-        did not. Only a list that answered says a session is signed in."""
+        did not. Only a list that answered says a session is signed in, and
+        a list needs no PDF link, so nothing is pressed."""
         try:
-            return len(site.learn(page).accounts), None
+            return len(site.learn(page, form=False).accounts), None
         except (site.NotThere, site.NotLearned, site.SessionExpired) as e:
             return 0, e
 
@@ -443,8 +466,9 @@ class App:
             self.check_session(page)
         # The statements page is reloaded to hear its own list call,
         # and every account's statements are asked for the same way, year
-        # by year. Nothing is pressed. A list that does not fit what the
-        # recordings showed stops the run (bofa_site.NotLearned, ListCut).
+        # by year. Nothing is pressed, since a list needs no PDF link. A
+        # list that does not fit what the recordings showed stops the run
+        # (bofa_site.NotLearned, ListCut).
         try:
             raw = site.collect_documents(page, keep=scope.period_filter(self.args, self.config),
                                          config=self.config)
@@ -596,7 +620,7 @@ class App:
                 raise
             except (site.NotThere, site.NotLearned, site.ListCut) as e:
                 # Every statement would say the same, so the run stops here.
-                self.stop_with("ask for a statement", e)
+                self.stop_with("download a statement", e)
             except site.SessionExpired:
                 # Already explained by download_one. Stop rather than grind
                 # through the rest producing empty "manual review" entries.
@@ -920,14 +944,19 @@ class App:
         return self._journal
 
     def write_failure(self, step: str, reason: str, text: str = "",
-                      postmortem: dict = None) -> None:
+                      postmortem: dict = None, extra: dict = None) -> None:
         """What the page looked like when this went wrong, to a file.
 
         Written without anybody having to know to ask for it. One per run,
-        taken while the page is still sitting on the thing that broke."""
+        taken while the page is still sitting on the thing that broke.
+        `extra` holds only our own words, counts and yes or no, such as a
+        press's stop's facts."""
         if self.stats.get("failure_files"):
             return
-        extra = {"postmortem": postmortem} if postmortem else None
+        extra = dict(extra or {})
+        if postmortem:
+            extra["postmortem"] = postmortem
+        extra = extra or None
         try:
             if getattr(self, "_work_page", None) is not None:
                 self.journal.checkpoint("when the run gave up")
@@ -958,22 +987,25 @@ class App:
         print("  Read it through, then attach it to this provider's issue on")
         print("  GitHub. It is the one thing that saves a round of guessing.")
 
-    def write_survey(self) -> None:
+    def write_survey(self, stopped=None) -> None:
         """The survey Diagnose is safe to send, on the same list of what may
-        leave that the failure file uses."""
+        leave that the failure file uses, saying why Diagnose stopped when a
+        press stopped it."""
         failure.write_survey(
             self.paths.diagnostics,
             page=getattr(self, "_work_page", None),
             selectors=getattr(site, "FALLBACK", None),
             journal=self._journal,
             requests=self._requests,
-            provider='Bank of America')
+            provider='Bank of America',
+            stopped=stopped or getattr(self, "_diagnose_stopped", None))
 
     def cmd_diagnose(self):
         self.stats["mode"] = "diagnose"
         words = words_for('Bank of America', site)
         page = self.page()
         info = {"timestamp": now_iso()}
+        stopped = None
         try:
             info["on_site"] = site.is_safe_url(page.url or "")
             info["signed_out"] = site.looks_signed_out(page)
@@ -984,15 +1016,25 @@ class App:
             info["mapped"] = not getattr(site, "NOT_MAPPED", "")
             # The page the person left open, and on the statements page what
             # its own list call answers, as names and counts. Nothing is
-            # followed, pressed or downloaded (bofa_site.survey).
+            # followed or downloaded, and the one press is the Statements
+            # heading when it is shut (bofa_site.survey).
             info["survey"] = site.survey(page)
             # No screenshot. A bank's pages show balances, and a PNG of one
             # would sit in Diagnostics where it is easy to attach to a bug
             # report by accident.
+        except pressing.Stop as stop:
+            # Something over the Statements heading ends the look there, and
+            # the file still says what was seen and why it stopped.
+            stopped = stop
+            info["stopped"] = {"step": stop.step, "reason": stop.reason, "facts": stop.facts}
         except Exception as e:
             info["error"] = type(e).__name__
+        self._diagnose_stopped = stopped
         out = self.paths.diagnostics / "diagnose-documents.json"
         write_shaped(out, info, words)
+        if stopped is not None:
+            # The stop's own words, as a run says them.
+            pressing.say(stopped)
         print(f"Wrote {out}")
         print("  That is the detailed file, for repairing this provider. Any word")
         print("  in it that is not on PaperPull's fixed list is written as its")
@@ -1076,7 +1118,7 @@ def build_parser() -> argparse.ArgumentParser:
             ("resume", "continue an interrupted run"),
             ("verify", "re-validate every saved PDF"),
             ("rename", "rename downloaded files to this app's current naming"),
-            ("diagnose", "survey the open page and its statements list (no downloads, nothing pressed)"),
+            ("diagnose", "survey the open page and its statements list (no downloads)"),
             ("record", "record your own path to a statement, so this app can be repaired (downloads nothing)"),
             ]:
         ap.add_argument(f"--{name}", action="store_true", help=help_text)
@@ -1135,6 +1177,11 @@ def main(argv=None):
         else:
             build_parser().print_help()
             return 0
+    except pressing.Stop as stop:
+        # Something over the Statements heading, or a press that did not go
+        # through, stops the run here, with the reason said and the failure
+        # file written.
+        pressing.stop_run(app, stop)
     except KeyboardInterrupt:
         print("\nStopped by user. Progress saved.")
         return 130

@@ -44,7 +44,7 @@ The `.gitignore` already blocks all of the following. Do not override it.
   how the provider exposes its documents:
 
   - **Apps that hold a control to an allowlist** (AAFMAA, ADP, Ally, Alpaca,
-    American Family, Apple Card, AT&T, Best Buy, Bilt, Chase, Chase Business,
+    American Family, Apple Card, AT&T, Bank of America, Best Buy, Bilt, Chase, Chase Business,
     Coinbase, Costco, Discover, Dominion, eBay, E*TRADE, Fairfax Water, First
     Horizon, Golden 1, Interactive Brokers, M&T, Meijer, Nelnet, Newrez,
     PayPal, PG&E, RedCard, SBA, Shelby County, Simmons Bank, SMUD, Spectrum,
@@ -58,7 +58,11 @@ The `.gitignore` already blocks all of the following. Do not override it.
     Horizon, Simmons Bank, Spectrum, TreasuryDirect and Venmo narrow the
     allowlist to the whole labels they press, and all of them but
     TreasuryDirect give each control a guard of its own built the same way.
-    Best Buy presses only its year menu and a year in it. M&T presses only
+    Best Buy presses only its year menu and a year in it. Bank of America
+    presses only the Statements heading of its statements page, a button
+    whose whole name is Statements and which says it is shut, once, when the
+    page shows no Download PDF link, and asks for every list and PDF from
+    inside the page. M&T presses only
     the year headings of its statements list, and since a year is no
     document word, `is_safe_control()` would refuse them. So the heading
     has a guard of its own, the blocklists plus its whole words, a year
@@ -81,7 +85,7 @@ The `.gitignore` already blocks all of the following. Do not override it.
     the blocklist inline, since a document allowlist would refuse the paging
     they need.
   - **Apps that click nothing at all during a run** (Affirm, Amazon, Anthem,
-    Apple, Bank of America, Citi, E-ZPass Virginia, FedEx, Fidelity, Gap, GitHub, Home Depot,
+    Apple, Citi, E-ZPass Virginia, FedEx, Fidelity, Gap, GitHub, Home Depot,
     Invest529, IRS, Kroger, Lowe's, MILITARY STAR, myPay, NetBenefits, Optum
     Bank, Paylocity, SDG&E, Stripe, TSP, Uber, UKG and UPS) open the provider's
     pages by their address and read them, or ask for the same lists and
