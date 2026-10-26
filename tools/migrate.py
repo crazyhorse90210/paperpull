@@ -90,7 +90,11 @@ with one plan that gains another does not save its history again. On a
 sign-in with several plans it also keeps the plan's digest, the digests
 of the other plans a combined statement names and the digest of the
 statement's text, so a plan whose own statement is that one is not saved
-twice. None of these is a plan or employer number.
+twice. None of these is a plan or employer number. It leaves out the
+employer's name a combined statement was made under and whether a
+statement waits in Manual Review for one to tell its plan, so after the
+move such a statement is set aside like any other in Manual Review, never
+filed, and is made and judged again once its file there is gone.
 A record still under a key that left out its account's
 last four, as the apps did past forty characters until 0.34.0 and Chase did
 at any length until 0.17.1, also keeps what its key is built from
