@@ -1246,7 +1246,7 @@ def collapse_all_cards(page) -> None:
             log.info("could not collapse %r: %s", name[:40], e)
 
 
-def expand_only_card(page, label: str) -> bool:
+def expand_only_card(page, label: str, why: Optional[dict] = None) -> bool:
     """Expand this card's accordion, with every other one closed.
 
     The card is ALWAYS collapsed first if it is already open. Chase fetches a
@@ -1255,6 +1255,10 @@ def expand_only_card(page, label: str) -> bool:
     listens would record nothing for it. That is not an empty card, it is a
     missing one: the first live run captured five of six cards this way, and
     the sixth was simply the one the page had open.
+
+    `why` gets "would not open" when the card's accordion is on the page and
+    pressing it raised. A card with no accordion on the page is not that,
+    since a year's view may not draw a card that did not exist that year.
     """
     for el, name in card_accordions(page):
         if name != label:
@@ -1268,6 +1272,8 @@ def expand_only_card(page, label: str) -> bool:
             return True
         except Exception as e:
             log.info("could not expand %r: %s", name[:40], e)
+            if why is not None:
+                why["why"] = "would not open"
             return False
     return False
 
@@ -1354,11 +1360,14 @@ def read_card_rows(page, label: str) -> List[dict]:
     and changing the year all fire the same endpoint, so "the next reply" is
     not reliably the reply to this click.
 
-    A card whose accordion would not open was not read, which is never a
-    card with no statement, so its passed_over names it.
+    A card whose accordion is on the page and would not open was not read,
+    which is never a card with no statement, so its passed_over names it.
+    A card the view does not draw at all is left as it always was, since a
+    year's view may not draw a card that did not exist that year (review).
     """
-    if not expand_only_card(page, label):
-        return _listed([], ("card",))
+    why: dict = {}
+    if not expand_only_card(page, label, why):
+        return _listed([], ("card",) if why.get("why") == "would not open" else ())
     out: List[dict] = []
     try:
         links = page.get_by_role("link", name=re.compile(r"Saves document", re.I))

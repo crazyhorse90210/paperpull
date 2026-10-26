@@ -401,11 +401,12 @@ TAX_YEAR_RE = re.compile(r"tax\s*year\s*:?\s*(\d{4})", re.I)
 
 
 class TaxYears(list):
-    """The tax years to read. picker is True when they are the tax-year
-    dropdown's own options, so one that would not be chosen is a year of
-    the list not read, where years read from the page's text may be any
-    year it prints."""
-    picker = False
+    """The tax years to read. offered names those the tax-year dropdown
+    lists under a label select_tax_year chooses by, so one that would not
+    be chosen is a year of the list not read. Years read from the page's
+    text may be any year it prints, and an option worded otherwise may be
+    one select_tax_year could never choose, so neither is offered."""
+    offered: frozenset = frozenset()
 
 
 def get_tax_years(page) -> TaxYears:
@@ -413,6 +414,7 @@ def get_tax_years(page) -> TaxYears:
     native <select> whose options read 'Tax Year: 2025'. An option that is
     turned off cannot be chosen, and is not one it offers."""
     years = TaxYears()
+    offered = set()
     try:
         sel = page.locator(FALLBACK["select_tax_year"])
         if sel.count() > 0:
@@ -420,9 +422,11 @@ def get_tax_years(page) -> TaxYears:
                 m = TAX_YEAR_RE.search(opt)
                 if m:
                     years.append(m.group(1))
+                    if opt.strip() in ("Tax Year: %s" % m.group(1), m.group(1)):
+                        offered.add(m.group(1))
     except Exception:
         pass
-    years.picker = bool(years)
+    years.offered = frozenset(offered)
     if not years:  # fallback: scrape the page text
         try:
             body = page.locator("body").inner_text(timeout=8000)

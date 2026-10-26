@@ -524,7 +524,7 @@ def expand_only(page, name_needle: str) -> Optional[bool]:
             exp = (g.get_attribute("aria-expanded") or "").lower()
         except Exception:
             continue
-        want = name_needle.lower() in txt.lower()
+        want = _words(name_needle) in _words(txt)
         if want:
             if exp != "true":
                 try:
@@ -558,13 +558,21 @@ def _another_group_open(page, name_needle: str) -> bool:
         states = page.locator(GROUP_SEL).evaluate_all(_GROUP_STATES_JS)
     except Exception:
         return True
-    needle = (name_needle or "").lower()
+    needle = _words(name_needle)
     for state in states or []:
         if not isinstance(state, list) or len(state) != 2:
             return True
-        if state[1] == "true" and needle not in str(state[0] or "").lower():
+        if state[1] == "true" and needle not in _words(str(state[0] or "")):
             return True
     return False
+
+
+def _words(text: str) -> str:
+    """A header's words in lowercase, every run of spaces and line breaks one
+    space. group_names gives a header's name so, and a header whose words
+    are on two lines read as no group of that name, so it was never
+    opened (review)."""
+    return " ".join((text or "").split()).lower()
 
 
 _NFCU_ROW_JS = r"""() => {

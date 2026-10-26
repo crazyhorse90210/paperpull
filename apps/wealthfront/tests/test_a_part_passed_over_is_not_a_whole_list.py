@@ -73,7 +73,7 @@ def page():
 
 def test_the_dropdowns_own_years_are_said_to_be_its(page):
     years = site.get_tax_years(page)
-    assert list(years) == ["2031", "2030"] and years.picker is True
+    assert list(years) == ["2031", "2030"] and years.offered == {"2031", "2030"}
 
 
 def test_a_turned_off_year_is_not_one_the_dropdown_offers(page):
@@ -84,7 +84,16 @@ def test_a_turned_off_year_is_not_one_the_dropdown_offers(page):
 def test_years_read_from_the_pages_text_are_not_the_dropdowns(page):
     page.set_content(TEXT_ONLY)
     years = site.get_tax_years(page)
-    assert list(years) == ["2031", "2030"] and years.picker is False
+    assert list(years) == ["2031", "2030"] and years.offered == frozenset()
+
+
+def test_a_year_worded_otherwise_than_it_is_chosen_by_is_not_offered(page):
+    """select_tax_year chooses by the label "Tax Year: 2029" or "2029", so
+    an option reading "TAX YEAR 2029" is read but never one it could
+    choose, and a refusal of it says nothing about the page (review)."""
+    page.set_content(PAGE % ("<option>TAX YEAR 2029</option>", ACCOUNT))
+    years = site.get_tax_years(page)
+    assert list(years) == ["2031", "2030", "2029"] and years.offered == {"2031", "2030"}
 
 
 # -- Discover ---------------------------------------------------------------------
@@ -166,6 +175,16 @@ def test_a_year_from_the_pages_text_that_would_not_take_is_left_as_it_was(
     page.set_content(TEXT_ONLY)
     app = make_app("--all")
     app.cmd_run("all")
+    assert listing.last(app) == listing.COMPLETE
+
+
+def test_a_year_worded_otherwise_that_would_not_take_is_left_as_it_was(make_app, monkeypatch,
+                                                                       page):
+    page.set_content(PAGE % ("<option>TAX YEAR 2029</option>", ACCOUNT))
+    year_will_not_take(monkeypatch, "2029")
+    app = make_app("--all")
+    app.cmd_run("all")
+    assert sorted(make_app.pressed) == ["2030-12-31", "2031-12-31"]
     assert listing.last(app) == listing.COMPLETE
 
 

@@ -368,8 +368,9 @@ class App:
             years = site.get_tax_years(page)
             # A year the dropdown offered and would not take is a year of
             # the list not read. Years read from the page's text may be any
-            # it prints, so one of those is left as it always was.
-            offered = getattr(years, "picker", False)
+            # it prints, so one of those is left as it always was, and so is
+            # an option worded otherwise than select_tax_year chooses by.
+            offered = getattr(years, "offered", frozenset())
             years = list(years) or [""]
             log.info("Tax years offered: %s", years)
             keep = scope.period_filter(self.args, self.config)
@@ -382,7 +383,7 @@ class App:
             for year in years:
                 if year and not site.select_tax_year(page, year):
                     log.info("Could not select tax year %s", year)
-                    if offered:
+                    if year in offered:
                         passed_over = True
                     continue
                 site.scroll_full_page(page, rounds=2)

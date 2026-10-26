@@ -46,8 +46,10 @@ def rows_of(label, year):
 def pickers(monkeypatch):
     """The page's pickers, stood in for. `refuse` names the years the year
     picker will not take, `unlisted` the years the opened picker does not
-    list, and `closed` the cards whose accordion will not open."""
-    state = {"year": None, "refuse": set(), "unlisted": set(), "closed": set()}
+    list, `closed` the cards whose accordion will not open, and `undrawn`
+    the cards with no accordion on the page."""
+    state = {"year": None, "refuse": set(), "unlisted": set(), "closed": set(),
+             "undrawn": set()}
 
     def select_year(_page, year, why=None):
         if year in state["unlisted"]:
@@ -59,8 +61,10 @@ def pickers(monkeypatch):
         state["year"] = year
         return True
 
-    def expand_only_card(_page, label):
-        return label not in state["closed"]
+    def expand_only_card(_page, label, why=None):
+        if label in state["closed"] and why is not None:
+            why["why"] = "would not open"
+        return label not in state["closed"] | state["undrawn"]
 
     monkeypatch.setattr(site, "ensure_statements", lambda page: True)
     monkeypatch.setattr(site, "year_options", lambda page: list(YEARS))
@@ -74,7 +78,7 @@ def pickers(monkeypatch):
         # A card that would not open goes through the real read_card_rows,
         # whose accordion is the one stood in for above, and an open card
         # shows the rows of the year chosen.
-        if label in state["closed"]:
+        if label in state["closed"] | state["undrawn"]:
             return real_read(page, label)
         return rows_of(label, state["year"])
     monkeypatch.setattr(site, "read_card_rows", read_rows)
@@ -118,6 +122,47 @@ def test_a_card_that_would_not_open_is_passed_over(pickers):
     got = site.chase_collect_via_api(page=None)
     assert {a for a, _d in read(got)} == {CARDS[0]}
     assert got.passed_over == ("card",)
+
+
+def test_a_card_a_view_does_not_draw_is_not_passed_over(pickers):
+    """The cards are read once, on the view the page opens on, and looked
+    for again on every year's. A year before a card existed may not draw
+    it, which is no card that would not open (review)."""
+    pickers["undrawn"].add(CARDS[1])
+    got = site.chase_collect_via_api(page=None)
+    assert {a for a, _d in read(got)} == {CARDS[0]}
+    assert got.passed_over == ()
+
+
+# -- a card's accordion, in a browser ---------------------------------------------
+
+CARD_PAGE = """<!doctype html><html><body>
+<button type="button" aria-expanded="false">EXAMPLE CARD (...0001)</button>
+</body></html>"""
+
+
+def test_a_card_whose_accordion_will_not_take_a_press_would_not_open(page):
+    page.set_content(CARD_PAGE)
+    page.evaluate("() => { document.querySelector('button').style.pointerEvents = 'none'; }")
+    page.set_default_timeout(1500)
+    why = {}
+    assert site.expand_only_card(page, CARDS[0], why) is False
+    assert why == {"why": "would not open"}
+    assert site.read_card_rows(page, CARDS[0]).passed_over == ("card",)
+
+
+def test_a_card_the_page_does_not_draw_is_not_one_that_would_not_open(page):
+    page.set_content(CARD_PAGE)
+    why = {}
+    assert site.expand_only_card(page, CARDS[1], why) is False
+    assert why == {}
+    assert getattr(site.read_card_rows(page, CARDS[1]), "passed_over", ()) == ()
+
+
+def test_a_card_on_the_page_opens(page):
+    page.set_content(CARD_PAGE)
+    why = {}
+    assert site.expand_only_card(page, CARDS[0], why) is True and why == {}
 
 
 # -- the choice of a year, in a browser -------------------------------------------

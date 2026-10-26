@@ -75,7 +75,8 @@ All notable changes to PaperPull are recorded here. Versioning follows
   failed were passed over, and the list was still noted as read whole. Now
   the run keeps what it read and takes it, writes a failure file and stops
   at its end rather than finish, so the next run reads the list again. A
-  year that is turned off is never chosen.
+  year that is turned off is never chosen, and a group whose header's
+  words sit on two lines is now opened like any other.
 - **Wealthfront never calls its document list whole with a tax year left
   out.** A tax year its dropdown offered and would not take was passed
   over, and the list was still noted as read whole. Now the run keeps what

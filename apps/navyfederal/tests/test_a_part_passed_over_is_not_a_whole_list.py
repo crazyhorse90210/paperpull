@@ -137,6 +137,17 @@ def test_a_year_whose_choice_would_not_take_is_passed_over(page, monkeypatch):
     assert got.passed_over == ("year picker",)
 
 
+def test_a_header_on_two_lines_is_its_group(page):
+    """group_names gives a header's words on one line, and its group was
+    looked for by them in the header as it reads, line break and all, so it
+    was never opened, and now that would be passed over every run
+    (review)."""
+    page.set_content(PAGE % ("INVENTED CHECKING<br>ACCOUNTS", PREVIOUS, ""))
+    got = site.nfcu_collect(page)
+    assert dated(got) == ALL
+    assert got.passed_over == ()
+
+
 def test_a_turned_off_year_is_never_chosen_or_passed_over(page, monkeypatch):
     """Choosing it waited out its time and was taken for a year that would
     not take."""
