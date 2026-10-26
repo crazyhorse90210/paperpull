@@ -9,6 +9,22 @@ All notable changes to PaperPull are recorded here. Versioning follows
 
 ## [Unreleased]
 
+### Security
+- **The Windows and Mac packages and the server image take pypdf 6.21.2
+  and setuptools 84.1.0.** pypdf 6.21.1 has three advisories fixed in
+  6.21.2, each a PDF made to keep pypdf reading for a long time, through
+  repeated references to one missing object (GHSA-6c7f-9265-g8fw), a
+  cross-reference table with wrong upper limits (GHSA-gmh7-3g9r-mjh5) or
+  repeated malformed cross-reference streams (GHSA-jr96-gvgh-j3r4).
+  PaperPull reads each PDF in a process of its own that is stopped after
+  two minutes, so such a PDF was set aside unread and the run went on.
+  setuptools 84.0.0 has a low advisory about installing old style wheels
+  on Windows (GHSA-xmj3-9gf7-h52w). The packages use it only to build
+  PaperPull's own core and then remove it, and the server image runs on
+  Linux, so neither reached it. A checkout's requirements ask for pypdf
+  6.21.2 as well. The packages also take starlette 1.9.0, which the
+  server image already ran, and the image takes starlette 1.10.0.
+
 ### Added
 - **Bank of America downloads statements (#121).** Checking, savings and
   credit card statements from Statements & Documents, built from the two
