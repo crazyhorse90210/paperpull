@@ -667,7 +667,16 @@ _ROW_OF_JS = r"""el => {
 }"""
 
 
-def collect_download_docs(page, walk: Optional[dict] = None) -> List[RawDoc]:
+class Listed(list):
+    """The documents discovery read. passed_over names each part of the
+    list it could not read through, "statements page" for one whose
+    address would not open and "year picker" for a year the picker offered
+    whose choice would not take, so the list is not whole however much was
+    read."""
+    passed_over: tuple = ()
+
+
+def collect_download_docs(page, walk: Optional[dict] = None) -> Listed:
     """Every statement on the monthly page, then every 1098 on the yearly
     page. Each control's own name, or the row it sits in, carries the
     date. A page that shows an error instead of a list is said so.
@@ -675,9 +684,15 @@ def collect_download_docs(page, walk: Optional[dict] = None) -> List[RawDoc]:
     What a page shows first is read as it always was, and then the list
     for every year its year picker offers, since the monthly page shows
     one year at a time (#38). `walk` collects what each page's picker
-    gave, in counts and fixed words, for the discovery line."""
-    docs: List[RawDoc] = []
+    gave, in counts and fixed words, for the discovery line.
+
+    A statements page whose address would not open, and a year the picker
+    offered whose choice would not take, were not read, and passed_over
+    names them. A year whose list never showed is not, since a year with
+    no statement never shows one, as the tester's own walk ended (#38)."""
+    docs = Listed()
     seen: set = set()
+    passed_over = set()
     loan = loan_number(page)
     for path in STATEMENT_PAGES:
         if loan:
@@ -687,6 +702,7 @@ def collect_download_docs(page, walk: Optional[dict] = None) -> List[RawDoc]:
                 dismiss_overlay(page)
             except Exception as e:
                 log.info("goto %s failed: %s", path, e)
+                passed_over.add("statements page")
                 continue
         try:
             body = page.locator("body").inner_text(timeout=5000)
@@ -696,10 +712,14 @@ def collect_download_docs(page, walk: Optional[dict] = None) -> List[RawDoc]:
             pass
         _read_rows(page, docs, seen)
         facts = _walk_years(page, docs, seen)
+        if any(isinstance(entry, list) and entry[-1:] == ["could not be chosen"]
+               for entry in facts.get("walked") or []):
+            passed_over.add("year picker")
         if walk is not None:
             walk[path.rsplit("/", 1)[-1]] = facts
         if not loan:
             break
+    docs.passed_over = tuple(sorted(passed_over))
     return docs
 
 

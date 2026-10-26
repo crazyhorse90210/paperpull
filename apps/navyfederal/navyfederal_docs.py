@@ -131,6 +131,10 @@ def migrate_legacy_keys(records: dict) -> int:
 class App:
     _journal = None
     _requests = None
+    # Set when the list's walk passed over a group or a year it could not
+    # open, so the run goes on with what it read and stops at its end
+    # rather than finish (_stop_if_cut_short).
+    _list_cut_short = False
 
     def __init__(self, args):
         self.args = args
@@ -446,7 +450,11 @@ class App:
             return 1
         return 0
 
-    def cmd_discover(self, quiet: bool = False) -> int:
+    def cmd_discover(self, quiet: bool = False, finish: bool = True) -> int:
+        # A list read only in part (passed_over) keeps the documents it
+        # found, and Pilot and Run All go on with them, but the run stops at
+        # its end rather than finish. With finish=False the caller does that
+        # once it has used them.
         # A listing that stops on the way, however it stops, is noted as one
         # that stopped, for Resume (paperpull_core.listing).
         listing.started(self)
@@ -465,18 +473,35 @@ class App:
         # group's rows carry a date + a "View" button (no documents API).
         raw = site.nfcu_collect(page)
         log.info("Navy Federal: collected %d document rows across accounts", len(raw))
+        passed_over = list(getattr(raw, "passed_over", ()))
+        if passed_over:
+            # A group or a year the page offered and the walk could not
+            # read is a part of the list missing, so the list is not noted
+            # whole, and the run goes on with what it read and stops at its
+            # end rather than finish.
+            self._list_cut_short = True
+            log.info("Navy Federal: the list was not read through the %s",
+                     " and the ".join(passed_over))
+            print("\n  Navy Federal's statement list was not read whole, since an account group")
+            print("  or a year on it could not be opened. What was read is kept, and this run")
+            print("  stops at its end rather than finish. The next run reads the list again.")
+            self.write_failure("read the statement list", "some of the list could not be chosen")
         n_new = 0
         for d in raw:
             n_new += self._record_nfcu_doc(d)
         self.discovery.save()
         # The whole list is in, and only now may a Resume that carries on
-        # from it call the run finished (paperpull_core.listing).
-        listing.read_whole(self)
+        # from it call the run finished (paperpull_core.listing). A list read
+        # in part is not, and the listing stays one that stopped.
+        if not self._list_cut_short:
+            listing.read_whole(self)
         self.stats["discovered"] = len(self.discovery.data)
 
         if not quiet:
             docs = [Document.from_dict(v) for v in self.discovery.data.values()]
-            print(f"\nDiscovery complete. Documents known: {len(docs)}")
+            print("\nDiscovery %s. Documents known: %d"
+                  % ("read part of the statement list" if self._list_cut_short else "complete",
+                     len(docs)))
             by_cat = {}
             for d in docs:
                 by_cat.setdefault(d.category, []).append(d)
@@ -492,7 +517,20 @@ class App:
                 print(f"  Date range: {dates[0]} .. {dates[-1]}")
             if self.stats["skipped_out_of_scope"]:
                 print(f"  Skipped as out of scope: {self.stats['skipped_out_of_scope']}")
+        if finish:
+            self._stop_if_cut_short()
         return n_new
+
+    def _stop_if_cut_short(self) -> None:
+        """A run that did not read the whole statement list did not finish,
+        and must not read as a clean one. Once it has used what came, it
+        leaves on SystemExit the way a run leaves on a sign-out, which the
+        panel reports as a run that stopped."""
+        if self._list_cut_short:
+            print("\nNot all of Navy Federal's statement list was read, so this run stops here")
+            print("rather than finish. Everything it saved is kept. Run it again later to")
+            print("read the rest.")
+            raise SystemExit(0)
 
     def _select(self, limit: Optional[int] = None) -> List[Document]:
         docs = [Document.from_dict(v) for v in self.discovery.data.values()]
@@ -783,14 +821,16 @@ class App:
     def cmd_pilot(self):
         self.stats["mode"] = "pilot"
         print("PILOT MODE - limited supervised test run.\n")
-        self.cmd_discover()
+        self.cmd_discover(finish=False)
         docs = self._select(limit=self.config.get("pilot_count", 5))
         if not docs:
             print("\nNo documents in scope to pilot. Run --diagnose.")
+            self._stop_if_cut_short()
             return
         print(f"\nDownloading {len(docs)} document(s)...")
         self.process(docs, dry_run=self.args.dry_run)
         self._pilot_report(docs)
+        self._stop_if_cut_short()
 
     def _pilot_report(self, docs: List[Document]):
         print("\n" + "=" * 70)
@@ -830,10 +870,11 @@ class App:
             if ask("> ").strip().upper() != "YES":
                 print("Aborted. (Run the pilot first if you haven't: --pilot)")
                 return
-        self.cmd_discover()
+        self.cmd_discover(finish=False)
         docs = self._select()
         print(f"\nDownloading {len(docs)} document(s)...")
         self.process(docs, dry_run=self.args.dry_run)
+        self._stop_if_cut_short()
 
     def cmd_resume(self):
         self.stats["mode"] = "resume"

@@ -524,7 +524,7 @@ def expand_only(page, name_needle: str) -> Optional[bool]:
             exp = (g.get_attribute("aria-expanded") or "").lower()
         except Exception:
             continue
-        want = name_needle.lower() in txt.lower()
+        want = _words(name_needle) in _words(txt)
         if want:
             if exp != "true":
                 try:
@@ -558,13 +558,21 @@ def _another_group_open(page, name_needle: str) -> bool:
         states = page.locator(GROUP_SEL).evaluate_all(_GROUP_STATES_JS)
     except Exception:
         return True
-    needle = (name_needle or "").lower()
+    needle = _words(name_needle)
     for state in states or []:
         if not isinstance(state, list) or len(state) != 2:
             return True
-        if state[1] == "true" and needle not in str(state[0] or "").lower():
+        if state[1] == "true" and needle not in _words(str(state[0] or "")):
             return True
     return False
+
+
+def _words(text: str) -> str:
+    """A header's words in lowercase, every run of spaces and line breaks one
+    space. group_names gives a header's name so, and a header whose words
+    are on two lines read as no group of that name, so it was never
+    opened (review)."""
+    return " ".join((text or "").split()).lower()
 
 
 _NFCU_ROW_JS = r"""() => {
@@ -590,6 +598,12 @@ def collect_group_rows(page):
         return []
 
 
+# The options of a dropdown that can be chosen. A turned off one cannot be,
+# and choosing it waited out its time and was taken for a year that would
+# not take.
+_ENABLED_OPTION = "option:not([disabled])"
+
+
 def year_select(page):
     """The 'Previous Statements' archive has a year dropdown (2021..2026).
     Return (locator, [years]) if such a <select> is present, else (None, []).
@@ -602,7 +616,7 @@ def year_select(page):
     for s, _identity in _safe_selects(page, FORBIDDEN_CONTROL_RE,
                                       signed_out=looks_signed_out):
         try:
-            opts = [o.strip() for o in s.locator("option").all_inner_texts()]
+            opts = [o.strip() for o in s.locator(_ENABLED_OPTION).all_inner_texts()]
         except Exception:
             continue
         years = [o for o in opts if re.fullmatch(r"20\d{2}", o)]
@@ -611,11 +625,24 @@ def year_select(page):
     return None, []
 
 
-def nfcu_collect(page):
+class Listed(list):
+    """The documents a walk of the list read. passed_over names each part
+    of the list the page offered and the walk could not read through,
+    "account group" or "year picker", so the list is not whole however
+    much was read."""
+    passed_over: tuple = ()
+
+
+def nfcu_collect(page) -> Listed:
     """Every document across all account groups: list of {account,date,title}.
     For the 'Previous Statements' archive, iterate its year dropdown so the full
-    history (not just the default year) is captured."""
-    docs, seen = [], set()
+    history (not just the default year) is captured.
+
+    A group that would not open on its own, and a year whose choice raised,
+    were not read, and passed_over names them, where they used to be passed
+    over and the list noted whole without them."""
+    docs, seen = Listed(), set()
+    passed_over = set()
 
     def grab(acct):
         for r in collect_group_rows(page):
@@ -628,6 +655,7 @@ def nfcu_collect(page):
     for name in group_names(page):
         acct = re.sub(r"\s+", " ", name).strip()
         if not expand_only(page, name):
+            passed_over.add("account group")
             continue
         sel, years = year_select(page)
         if sel is not None and years:
@@ -637,10 +665,12 @@ def nfcu_collect(page):
                     page.wait_for_timeout(2500)
                     dismiss_timeout(page)
                 except Exception:
+                    passed_over.add("year picker")
                     continue
                 grab(acct)
         else:
             grab(acct)
+    docs.passed_over = tuple(sorted(passed_over))
     return docs
 
 

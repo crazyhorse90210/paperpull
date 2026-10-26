@@ -667,12 +667,32 @@ def describe_selects(page, limit: int = 12):
     return _controls.describe_selects(page, FORBIDDEN_CONTROL_RE, limit=limit)
 
 
+# The options of a dropdown that can be chosen. A turned off one cannot be,
+# and choosing it waited out its time and was taken for an account or a
+# year that would not take.
+_ENABLED_OPTION = "option:not([disabled])"
+
+
+class Listed(list):
+    """The documents a walk of the list read. passed_over names each part
+    of the list a picker offered and the walk could not read through,
+    "year picker", "card" or "account picker", so the list is not whole
+    however much was read."""
+    passed_over: tuple = ()
+
+
+def _listed(items, passed_over=()) -> Listed:
+    out = Listed(items)
+    out.passed_over = tuple(sorted(set(passed_over)))
+    return out
+
+
 def account_select(page):
     """Return (locator, [labels]) for a <select> that lists accounts, or
     (None, []). Money-movement pickers are refused outright."""
     for s, _identity in _safe_selects(page):
         try:
-            opts = [o.strip() for o in s.locator("option").all_inner_texts()]
+            opts = [o.strip() for o in s.locator(_ENABLED_OPTION).all_inner_texts()]
         except Exception:
             continue
         accts = [o for o in opts if o and _ACCOUNT_HINT_RE.search(o)
@@ -687,7 +707,7 @@ def year_select(page):
     split by year). Returns (locator, [years]) or (None, [])."""
     for s, _identity in _safe_selects(page):
         try:
-            opts = [o.strip() for o in s.locator("option").all_inner_texts()]
+            opts = [o.strip() for o in s.locator(_ENABLED_OPTION).all_inner_texts()]
         except Exception:
             continue
         years = [o for o in opts if re.fullmatch(r"20\d{2}", o)]
@@ -720,7 +740,7 @@ def _select_option(page, sel, label: str) -> bool:
         return False
 
 
-def chase_collect(page) -> List[dict]:
+def chase_collect(page) -> Listed:
     """Every statement Chase still has: a list of {account, date, title}.
 
     Walks the account dropdown (if there is one) and, within each account,
@@ -729,9 +749,14 @@ def chase_collect(page) -> List[dict]:
 
     This is the DOM fallback. chase_collect_via_api is tried first; this runs
     only if the API answered nothing (a redesign, or a locked-down session).
+
+    A year or an account whose choice did not take was not read, and is
+    named in passed_over, where it used to be passed over and the list
+    noted whole without it. One the guard refuses is never chosen.
     """
     docs: List[dict] = []
     seen = set()
+    passed_over = set()
 
     def grab(acct: str):
         expand_all(page)
@@ -753,6 +778,8 @@ def chase_collect(page) -> List[dict]:
             for y in years:
                 if _select_option(page, sel, y):
                     grab(acct)
+                else:
+                    passed_over.add("year picker")
         else:
             grab(acct)
             # no year dropdown: try pagination instead
@@ -764,12 +791,18 @@ def chase_collect(page) -> List[dict]:
     acct_sel, accounts = account_select(page)
     if acct_sel is not None and accounts:
         for a in accounts:
+            if FORBIDDEN_CONTROL_RE.search(a):
+                # Never chosen (_select_option), and no account whose
+                # statements are listed.
+                log.info("refusing account option %r", a[:60])
+                continue
             if not _select_option(page, acct_sel, a):
+                passed_over.add("account picker")
                 continue
             walk_years(re.sub(r"\s+", " ", a).strip())
     else:
         walk_years("")
-    return docs
+    return _listed(docs, passed_over)
 
 
 # ---------------------------------------------------------------------------
@@ -1213,7 +1246,7 @@ def collapse_all_cards(page) -> None:
             log.info("could not collapse %r: %s", name[:40], e)
 
 
-def expand_only_card(page, label: str) -> bool:
+def expand_only_card(page, label: str, why: Optional[dict] = None) -> bool:
     """Expand this card's accordion, with every other one closed.
 
     The card is ALWAYS collapsed first if it is already open. Chase fetches a
@@ -1222,6 +1255,10 @@ def expand_only_card(page, label: str) -> bool:
     listens would record nothing for it. That is not an empty card, it is a
     missing one: the first live run captured five of six cards this way, and
     the sixth was simply the one the page had open.
+
+    `why` gets "would not open" when the card's accordion is on the page and
+    pressing it raised. A card with no accordion on the page is not that,
+    since a year's view may not draw a card that did not exist that year.
     """
     for el, name in card_accordions(page):
         if name != label:
@@ -1235,6 +1272,8 @@ def expand_only_card(page, label: str) -> bool:
             return True
         except Exception as e:
             log.info("could not expand %r: %s", name[:40], e)
+            if why is not None:
+                why["why"] = "would not open"
             return False
     return False
 
@@ -1268,8 +1307,14 @@ def year_options(page) -> List[str]:
         return []
 
 
-def select_year(page, year: str) -> bool:
-    """Pick a year in the "View:" picker, the way a person would."""
+def select_year(page, year: str, why: Optional[dict] = None) -> bool:
+    """Pick a year in the "View:" picker, the way a person would.
+
+    `why` gets "not offered" when the opened picker lists no option for the
+    year. year_options reads the years from the whole page while the picker
+    is open, so such a year may be one printed beside it, which no run
+    could choose, where a year the picker lists and would not take is a
+    year of the list not read."""
     try:
         inp = page.locator(YEAR_PICKER_SEL).first
         if (inp.get_attribute("value") or "").strip() == str(year):
@@ -1284,6 +1329,8 @@ def select_year(page, year: str) -> bool:
         if opt.count() == 0:
             page.keyboard.press("Escape")
             log.info("year %s not offered", year)
+            if why is not None:
+                why["why"] = "not offered"
             return False
         opt.first.click()
         page.wait_for_timeout(3500)
@@ -1312,9 +1359,15 @@ def read_card_rows(page, label: str) -> List[dict]:
     instead put a card's statements under its neighbor: collapsing, expanding
     and changing the year all fire the same endpoint, so "the next reply" is
     not reliably the reply to this click.
+
+    A card whose accordion is on the page and would not open was not read,
+    which is never a card with no statement, so its passed_over names it.
+    A card the view does not draw at all is left as it always was, since a
+    year's view may not draw a card that did not exist that year (review).
     """
-    if not expand_only_card(page, label):
-        return []
+    why: dict = {}
+    if not expand_only_card(page, label, why):
+        return _listed([], ("card",) if why.get("why") == "would not open" else ())
     out: List[dict] = []
     try:
         links = page.get_by_role("link", name=re.compile(r"Saves document", re.I))
@@ -1345,16 +1398,21 @@ def read_card_rows(page, label: str) -> List[dict]:
     return out
 
 
-def chase_collect_via_api(page, keep=None) -> List[dict]:
+def chase_collect_via_api(page, keep=None) -> Listed:
     """Every document Chase still shows: each card, each year in the picker.
 
     Driven through the page's own accordions and year picker; this app issues
     no request of its own.
+
+    A year the picker lists and would not take, and a card whose accordion
+    would not open, were not read, and passed_over names them, where they
+    used to be passed over and the list noted whole without them.
     """
     found: List[dict] = []
+    passed_over = set()
     if not ensure_statements(page):
         log.info("documents page not reachable")
-        return []
+        return _listed([])
     years = year_options(page) or [""]
     if keep is not None:
         # A scoped run does not select years it will throw away. Each
@@ -1367,15 +1425,22 @@ def chase_collect_via_api(page, keep=None) -> List[dict]:
     cards = [label for _el, label in card_accordions(page)]
     if not cards:
         log.info("no card accordions found")
-        return []
+        return _listed([])
     log.info("Chase: %d card(s) x %d year(s)", len(cards), len(years))
 
     for year in years:
-        if year and not select_year(page, year):
-            continue
+        if year:
+            why: dict = {}
+            if not select_year(page, year, why):
+                # A year the opened picker does not list may be one printed
+                # beside it (select_year), and is left as it always was.
+                if why.get("why") != "not offered":
+                    passed_over.add("year picker")
+                continue
         collapse_all_cards(page)
         for label in cards:
             rows = read_card_rows(page, label)
+            passed_over.update(getattr(rows, "passed_over", ()))
             log.info("  %s %s: %d document(s)", year or "(current)", label[:34], len(rows))
             found.extend(rows)
             collapse_all_cards(page)
@@ -1388,7 +1453,7 @@ def chase_collect_via_api(page, keep=None) -> List[dict]:
         seen.add(key)
         out.append(rec)
     out.sort(key=lambda r: (r["date"], r["account"]), reverse=True)
-    return out
+    return _listed(out, passed_over)
 
 
 # ---------------------------------------------------------------------------

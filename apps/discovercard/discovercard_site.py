@@ -784,6 +784,26 @@ def describe_selects(page, limit: int = 12) -> List[dict]:
                                       extra_res=_EXTRA_RES, limit=limit)
 
 
+# The options of a dropdown that can be chosen. A turned off one cannot be,
+# and choosing it waited out its time and was taken for an account or a
+# year that would not take.
+_ENABLED_OPTION = "option:not([disabled])"
+
+
+class Listed(list):
+    """The documents a walk of the list read. passed_over names each part
+    of the list a dropdown offered and the walk could not read through,
+    "account picker" or "year picker", so the list is not whole however
+    much was read."""
+    passed_over: tuple = ()
+
+
+def _listed(items, passed_over=()) -> Listed:
+    out = Listed(items)
+    out.passed_over = tuple(sorted(set(passed_over)))
+    return out
+
+
 def account_select(page):
     """Return (locator, [labels]) for a <select> that lists accounts, or
     (None, []).
@@ -793,7 +813,7 @@ def account_select(page):
     """
     for s, _identity in _safe_selects(page):
         try:
-            opts = [o.strip() for o in s.locator("option").all_inner_texts()]
+            opts = [o.strip() for o in s.locator(_ENABLED_OPTION).all_inner_texts()]
         except Exception:
             continue
         accts = [o for o in opts if o and _ACCOUNT_HINT_RE.search(o)
@@ -808,7 +828,7 @@ def year_select(page):
     split by year). Returns (locator, [years]) or (None, [])."""
     for s, _identity in _safe_selects(page):
         try:
-            opts = [o.strip() for o in s.locator("option").all_inner_texts()]
+            opts = [o.strip() for o in s.locator(_ENABLED_OPTION).all_inner_texts()]
         except Exception:
             continue
         years = [o for o in opts if re.fullmatch(r"20\d{2}", o)]
@@ -841,7 +861,7 @@ def _select_option(page, sel, label: str) -> bool:
         return False
 
 
-def discovercard_collect(page) -> List[dict]:
+def discovercard_collect(page) -> Listed:
     """Every statement Discover still has: a list of {account, date, title}.
 
     Walks the account dropdown (if there is one) and, within each account,
@@ -850,9 +870,14 @@ def discovercard_collect(page) -> List[dict]:
 
     This is the DOM fallback. discovercard_collect_via_api is tried first; this runs
     only if the API answered nothing (a redesign, or a locked-down session).
+
+    A year or an account whose choice did not take was not read, and is
+    named in passed_over, where it used to be passed over and the list
+    noted whole without it. One the guard refuses is never chosen.
     """
     docs: List[dict] = []
     seen = set()
+    passed_over = set()
 
     def grab(acct: str):
         expand_all(page)
@@ -874,6 +899,8 @@ def discovercard_collect(page) -> List[dict]:
             for y in years:
                 if _select_option(page, sel, y):
                     grab(acct)
+                else:
+                    passed_over.add("year picker")
         else:
             grab(acct)
             # no year dropdown: try pagination instead
@@ -885,12 +912,18 @@ def discovercard_collect(page) -> List[dict]:
     acct_sel, accounts = account_select(page)
     if acct_sel is not None and accounts:
         for a in accounts:
+            if FORBIDDEN_CONTROL_RE.search(a):
+                # Never chosen (_select_option), and no account whose
+                # statements are listed.
+                log.info("refusing account option %r", a[:60])
+                continue
             if not _select_option(page, acct_sel, a):
+                passed_over.add("account picker")
                 continue
             walk_years(re.sub(r"\s+", " ", a).strip())
     else:
         walk_years("")
-    return docs
+    return _listed(docs, passed_over)
 
 
 # ---------------------------------------------------------------------------

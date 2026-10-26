@@ -250,6 +250,66 @@ All notable changes to PaperPull are recorded here. Versioning follows
   Listed until a later list showed them again. An empty list now sets
   nothing aside, and a requested statement is still marked No Longer
   Listed once the last day Citi lists it has passed.
+- **Chase never calls its statement list whole with a year or a card left
+  out.** The list is read year by year through the "View" picker and card
+  by card through each card's own accordion. A year the picker listed and
+  would not take, and a card whose accordion would not open, were passed
+  over, and the list was still noted as read whole, so Resume could call a
+  run finished with a year or a card never read. The page's text reading,
+  used when that walk finds nothing, did the same with an account or a
+  year its dropdowns offered. Now the run keeps what it read and takes it,
+  writes a failure file and stops at its end rather than finish, so the
+  next run reads the list again. A year the open picker does not list, an
+  option that is turned off and one the guard refuses are never chosen,
+  and are left as they were.
+- **Discover credit cards never call the statement list whole with an
+  account or a year left out.** When the statement links read nothing, the
+  page's text is read under each account and year its dropdowns offer. An
+  account or a year whose choice did not take was passed over, and the
+  list was still noted as read whole. Now the run keeps what it read and
+  takes it, writes a failure file and stops at its end rather than finish,
+  and that reading never chooses an option that is turned off or that the
+  guard refuses.
+- **Navy Federal never calls its statement list whole with an account
+  group or a year left out.** Each account's statements show in a group
+  opened with the others folded, and Previous Statements shows one year at
+  a time. A group that would not open on its own and a year whose choice
+  failed were passed over, and the list was still noted as read whole. Now
+  the run keeps what it read and takes it, writes a failure file and stops
+  at its end rather than finish, so the next run reads the list again. A
+  year that is turned off is never chosen, and a group whose header's
+  words sit on two lines is now opened like any other.
+- **Wealthfront never calls its document list whole with a tax year left
+  out.** A tax year its dropdown offered and would not take was passed
+  over, and the list was still noted as read whole. Now the run keeps what
+  it read and takes it, writes a failure file and stops at its end rather
+  than finish. Tax years read from the page's text, with no dropdown to
+  choose them in, and a year that is turned off are left as they were. A
+  statement type the filter would not take is still passed over quietly,
+  since an account may hold none of that type.
+- **Newrez never calls its document list whole with a statements page or
+  a year left out.** The monthly and yearly statements pages are opened by
+  their addresses, and the monthly page's year picker is walked. A page
+  whose address would not open and a year the picker offered whose choice
+  would not take were passed over, and the list was still noted as read
+  whole. Now the run keeps what it read and takes it, writes a failure
+  file and stops at its end rather than finish. A year whose list never
+  shows is left as it was, since a year with no statement never shows one.
+- **Costco never calls its purchase list whole with a tab or a quarter
+  left out.** Discovery reads the Warehouse and Online tabs and each
+  quarter the Showing picker offers. A tab that would not open and a
+  quarter the picker would not take were passed over, and the list was
+  still noted as read whole, so Resume carried on without reading it
+  again. Now the run goes on with what it read, writes a failure file and
+  stops at its end rather than finish, and Resume reads the list again. A
+  quarter that is turned off is never chosen.
+- **Target never calls its purchase list whole with a year left out.** On
+  a history page with a year filter, a year the filter offered that could
+  not be chosen was passed over, and the list was still noted as read
+  whole. Now the run goes on with what it read, writes a failure file and
+  stops at its end rather than finish, and Resume reads the list again. A
+  year that is turned off is never chosen. Target's history page shows no
+  such filter today, so this holds for a page that brings one back.
 
 ## [0.58.0] - 2026-10-24
 
