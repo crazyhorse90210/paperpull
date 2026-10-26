@@ -487,3 +487,107 @@ def test_an_install_that_owns_its_window_asks_and_then_goes_on(tmp_path, capsys,
 
     assert len(asked) == 1 and "shows your orders" in asked[0], asked
     assert kinds(tmp_path) == (2, 1)
+
+
+# -- a list that ends where it never came ------------------------------------------
+#
+# The history came, and the run went on to each tab, and to each year when
+# the page offers years to choose from. A year the filter offered that
+# could not be chosen was passed over, and the list was noted as read
+# whole. Resume then carried on from what it knew without reading the list
+# again. Now the run goes on with what it read, writes a failure file and
+# stops at its end. A year that is turned off is never chosen, and is no
+# part of the list passed over.
+
+def noted_whole(tmp_path):
+    """What the last listing noted, True for a list read to its end."""
+    path = tmp_path / "out" / "last-listing.json"
+    return json.loads(path.read_text(encoding="utf-8"))["complete"]
+
+
+def discover(tmp_path, cdp_url, capsys):
+    """Discover, however it ends, and what it printed."""
+    try:
+        app_mod.main(["--discover", "--config", config_for(tmp_path, cdp_url)])
+    except SystemExit:
+        pass
+    return printed(capsys)
+
+
+def with_years(options, select_attrs=""):
+    """The history with a year filter above its cards."""
+    return LISTED.replace(
+        '<div id="cards"></div>',
+        '<select aria-label="Year"%s>%s</select><div id="cards"></div>' % (select_attrs, options))
+
+
+TWO_YEARS = "<option>2026</option><option>2025</option>"
+
+
+def test_a_year_that_cannot_be_chosen_is_not_read_whole(attached, tmp_path, capsys, monkeypatch):
+    SITE.orders = with_years(TWO_YEARS)
+    real = site.select_year_option
+    monkeypatch.setattr(site, "select_year_option",
+                        lambda page, option: False if option == "2025" else real(page, option))
+    out = discover(tmp_path, attached, capsys)
+
+    assert kinds(tmp_path) == (2, 1), out
+    assert noted_whole(tmp_path) is False, out
+    assert "Target's purchase list was not read whole" in out, out
+    [failure] = list((tmp_path / "out" / "Diagnostics").glob("failure-*.json"))
+    report = json.loads(failure.read_text(encoding="utf-8"))
+    assert (report["step"], report["reason"]) == ("read the purchase list",
+                                                  "some of the list could not be chosen")
+
+
+def test_a_year_filter_busy_past_its_wait_is_not_read_whole(attached, tmp_path, capsys,
+                                                            monkeypatch):
+    """The filter is turned off as a whole when its years are asked for, so
+    no year can be chosen and none was read."""
+    monkeypatch.setattr(site, "YEAR_CHOICE_MS", 1500, raising=False)
+    SITE.orders = with_years(TWO_YEARS, " disabled")
+    out = discover(tmp_path, attached, capsys)
+
+    assert noted_whole(tmp_path) is False, out
+
+
+def test_a_turned_off_year_is_never_chosen_and_the_list_is_whole(attached, tmp_path, capsys,
+                                                                monkeypatch):
+    """A year with nothing in it may be drawn turned off. Choosing it waited
+    out thirty seconds and was taken for a year that would not take."""
+    SITE.orders = with_years("<option>2026</option><option disabled>2025</option>")
+    chosen = []
+    real = site.select_year_option
+
+    def choose(page, option):
+        chosen.append(option)
+        return real(page, option)
+    monkeypatch.setattr(site, "select_year_option", choose)
+    out = discover(tmp_path, attached, capsys)
+
+    assert kinds(tmp_path) == (2, 1), out
+    assert "2025" not in chosen and "2026" in chosen, chosen
+    assert noted_whole(tmp_path) is True, out
+
+
+def test_a_pilot_of_a_list_passed_over_stops_at_its_end(attached, tmp_path, capsys, monkeypatch):
+    """It takes what the list read, and stops at its end rather than
+    finish. A Resume after it reads the list again, and stops too."""
+    SITE.orders = with_years(TWO_YEARS)
+    monkeypatch.setattr(site, "select_year_option",
+                        lambda page, option: False if option == "2025"
+                        else real_choice(page, option))
+    taken = []
+    monkeypatch.setattr(app_mod.App, "process_purchases",
+                        lambda self, purchases, dry_run=False: taken.extend(purchases))
+    out = stopped_run(tmp_path, attached, capsys, "--pilot")
+
+    assert taken, out
+    assert "Not all of Target's purchase list was read, so this run stops here" in out, out
+    assert noted_whole(tmp_path) is False, out
+
+    stopped_run(tmp_path, attached, capsys, "--resume")
+    assert noted_whole(tmp_path) is False
+
+
+real_choice = site.select_year_option

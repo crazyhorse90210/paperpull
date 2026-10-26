@@ -493,7 +493,12 @@ YEAR_OPTION_RE = re.compile(
 def get_year_options(page) -> List[str]:
     """Return the year / date-range options of a real <select> filter, if one
     exists. Target's current history page uses 'Load more purchases' instead,
-    so this usually returns [], that's fine and handled by the caller."""
+    so this usually returns [], that's fine and handled by the caller.
+
+    An option that is turned off cannot be chosen, and is not one the
+    filter offers. Choosing it waited out YEAR_CHOICE_MS and was taken for
+    a year that would not take. Whether a select is a year filter is still
+    judged by all its options."""
     try:
         for select, _identity in _safe_selects(page, FORBIDDEN_CONTROL_RE,
                                                signed_out=looks_signed_out):
@@ -501,10 +506,17 @@ def get_year_options(page) -> List[str]:
             candidate = [o for o in options if YEAR_OPTION_RE.fullmatch(o)]
             # only trust selects where most options look like years/ranges
             if candidate and len(candidate) >= max(1, len([o for o in options if o]) - 1):
-                return candidate
+                enabled = {o.strip() for o in
+                           select.locator("option:not([disabled])").all_inner_texts()}
+                return [o for o in candidate if o in enabled]
     except Exception:
         pass
     return []
+
+
+# How long the year filter is given to take a year, Playwright's own thirty
+# seconds, waited while a filter that is busy is turned off.
+YEAR_CHOICE_MS = 30000
 
 
 def select_year_option(page, option_text: str) -> bool:
@@ -518,7 +530,7 @@ def select_year_option(page, option_text: str) -> bool:
                                                signed_out=looks_signed_out):
             options = select.locator("option").all_inner_texts()
             if any(option_text.strip() == o.strip() for o in options):
-                select.select_option(label=option_text.strip())
+                select.select_option(label=option_text.strip(), timeout=YEAR_CHOICE_MS)
                 page.wait_for_timeout(3000)
                 return True
     except Exception:

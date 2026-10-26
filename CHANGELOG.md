@@ -100,6 +100,13 @@ All notable changes to PaperPull are recorded here. Versioning follows
   again. Now the run goes on with what it read, writes a failure file and
   stops at its end rather than finish, and Resume reads the list again. A
   quarter that is turned off is never chosen.
+- **Target never calls its purchase list whole with a year left out.** On
+  a history page with a year filter, a year the filter offered that could
+  not be chosen was passed over, and the list was still noted as read
+  whole. Now the run goes on with what it read, writes a failure file and
+  stops at its end rather than finish, and Resume reads the list again. A
+  year that is turned off is never chosen. Target's history page shows no
+  such filter today, so this holds for a page that brings one back.
 
 ## [0.58.0] - 2026-10-24
 
