@@ -168,6 +168,31 @@ All notable changes to PaperPull are recorded here. Versioning follows
   0.19 and wrote the Schwab fix, which on that archive fetched exactly the
   20 new documents. Capital One had the same numbering and takes the same
   fix.
+- **NetBenefits saves a statement that names its plan only by type and
+  employer (#123).** On a sign-in with several plans, a statement must
+  name the plan it was made for, or it is set aside as the wrong document.
+  A 457(b)'s statements from mid 2022 on print a line naming the employer
+  and the title `457b Deferred Compensation Plan Retirement Savings
+  Statement`, never the plan's name on Choose a Plan, so all 18 were set
+  aside. Such a statement now counts as the plan's when the plan's name on
+  the list gives its type, the site's header named one employer on the
+  pages that showed the plan, every statement title in it is of that type
+  and one follows that employer's name, it names no other plan and gives
+  no type of a plan that may be at that employer, no other employer's name
+  ends that employer's name, and no other plan on the sign-in may be of
+  that type at that employer. A plan whose name gives no type counts as
+  one that may be, unless the header named another employer on its page,
+  or, for a plan whose page names none, its employer's combined statement
+  places it at another employer. That statement must name the plan and the
+  one it was made for, carry that plan's employer as the header named it,
+  and carry no other employer's name, and one saved by an earlier run is
+  read again while the header still names the same employer for its plan.
+  A statement waiting only on such a plan is held in Manual Review, judged
+  again at the end of each run that shows its plan, and filed or set aside
+  once that can be told, never filed unchecked. A type glued to the words
+  before it, as in `EMPLOYER MEM401K`, counts. A second plan of the type
+  at the employer, the employer's combined statement and another
+  employer's statement of the type are still set aside.
 
 ## [0.58.0] - 2026-10-24
 

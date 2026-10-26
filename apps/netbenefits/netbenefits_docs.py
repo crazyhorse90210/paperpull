@@ -61,7 +61,10 @@ log = logging.getLogger("netbenefits_docs")
 DONE_STATES = {State.COMPLETED.value, State.NO_RECEIPT_AVAILABLE.value}
 
 # The fields only a record of a login with several plans carries.
-PLAN_FIELDS = ("plan", "covers", "text_sha256")
+PLAN_FIELDS = ("plan", "covers", "text_sha256", "held", "employer")
+# The note on a statement held in Manual Review until a later statement
+# can tell whether it names its plan (App._hold).
+HELD = "held until a later statement can tell its plan"
 
 
 def _folded(text) -> str:
@@ -105,6 +108,13 @@ class Document:
         # statement, by the digest of its text kept beside them.
         self.covers = kw.get("covers", [])
         self.text_sha256 = kw.get("text_sha256", "")
+        # Held in Manual Review until a later statement can tell whether it
+        # names its plan (App._hold).
+        self.held = kw.get("held", False)
+        # For a statement that names other plans, the employer the header
+        # named for its plan when it was made, as site._bare writes it, so a
+        # later run may read it again to place those plans (App._place_from_saved).
+        self.employer = kw.get("employer", "")
         # Sticky "was successfully downloaded at least once" marker. Once set,
         # the document is never re-downloaded even if you delete the PDF (e.g.
         # after importing it into paperless-ngx).
@@ -698,10 +708,22 @@ class App:
             site.ensure_statements(page)
 
     def process(self, docs: List[Document], dry_run: bool = False):
+        # However the run ends, a statement held until a later statement
+        # can tell its plan is judged again before it does (_judge_held).
+        try:
+            self._process_each(docs, dry_run)
+        finally:
+            if not dry_run:
+                self._judge_held()
+
+    def _process_each(self, docs: List[Document], dry_run: bool = False):
         for i, doc in enumerate(docs, 1):
             print(f"\n[{i}/{len(docs)}] {doc.date or '(no date)'}  "
                   f"{doc.category}  {doc.summary}")
             if self._already_done(doc):
+                if (self.progress.get(doc.key) or {}).get("held") is True:
+                    print("  Held in Manual Review, and judged again at the end of the run.")
+                    continue
                 print("  Already downloaded and verified - skipping.")
                 self.stats["skipped_completed"] += 1
                 continue
@@ -840,6 +862,10 @@ class App:
             out_path = self._own_or_combined(page, doc, out_path)
             if out_path is None:
                 return
+        self._saved(doc, out_path)
+
+    def _saved(self, doc: Document, out_path: Path) -> None:
+        """A statement saved at `out_path` and checked, recorded as done."""
         doc.downloaded_ok = True   # done for good, even if the file is deleted later
         self._record(doc, State.COMPLETED)
         self._saved_this_run.add(doc.key)
@@ -858,11 +884,18 @@ class App:
 
     # -- a statement that covers several plans -----------------------------
 
-    def _own_or_combined(self, page, doc: Document, out_path: Path) -> Optional[Path]:
+    def _own_or_combined(self, page, doc: Document, out_path: Path,
+                         hold: bool = True) -> Optional[Path]:
         """The saved statement's own check, on a login with several plans.
 
         The statement must name the plan it was made for, or it is set aside
-        for review as the wrong document and None is answered. When it is,
+        for review as the wrong document and None is answered. One that
+        gives no plan's name from the list can still name its plan by its
+        type and its employer, under the narrow rule site.named_by_type
+        holds it to, and is then this plan's alone (#123). When that rule
+        waits only on the employer of a plan nothing places yet, and `hold`
+        allows, the statement is held in Manual Review instead, since a
+        combined statement read later may place that plan (_hold). When it is,
         by the digest of its text, the very statement another plan's request
         gave for this period and saved, naming this plan too, this copy is
         not kept, this plan is recorded as covered by that file, and None is
@@ -874,24 +907,25 @@ class App:
         for it, so a rename that fails leaves the summary it was saved by."""
         text = receipt_pdf.pdf_text(out_path)
         digest, spaced_digest = site.statement_digests(text)
-        named = site.plans_named(text, list(self._plans_by_digest.values()), chosen=doc.plan)
+        plans = list(self._plans_by_digest.values())
+        named, why = self._names_its_plan(text, doc, plans)
         if doc.plan not in {p["digest"] for p in named}:
-            self.stats["wrong_document"] = self.stats.get("wrong_document", 0) + 1
-            self.stats["manual_review"] += 1
-            quarantine = unique_path(self.paths.manual_review, out_path.name,
-                                     self.config["max_path_length"])
-            try:
-                out_path.replace(quarantine)
-            except OSError:
-                quarantine = out_path
-            doc.pdf_path, doc.pdf_filename = str(quarantine), quarantine.name
-            self._record(doc, State.NEEDS_MANUAL_REVIEW,
-                         notes="the statement does not name the plan it was made for")
-            self._write_row(doc, "Wrong plan", "Needs Manual Review")
-            self.write_failure('check the statement names its plan',
-                               'the statement did not name the plan it was made for')
-            print("  !! The statement does not name its plan. Moved to Manual Review.")
+            # A Download again whose record stays the earlier copy's
+            # (saved_copy) cannot hold this one, so it is set aside.
+            if hold and why.startswith(site.EMPLOYER_NOT_KNOWN) \
+                    and not saved_copy.holding(self, doc.key) and self._hold(doc, out_path, why):
+                return None
+            if why:
+                log.info("%s %s names no plan by name, nor by type and employer: %s",
+                         doc.title, doc.date, why)
+            self._set_aside(doc, out_path)
             return None
+        # A combined statement may place a plan whose page named no
+        # employer, for a statement held until one does (site.note_combined).
+        # The employer the header named for its plan is kept with it, so a
+        # later run can read it again (_place_from_saved).
+        if site.note_combined(text, doc.plan, plans):
+            doc.employer = site.employer_of(self._plans_by_digest[doc.plan])
         covering = self._covered_already(doc, digest, spaced_digest)
         # Download again asks for each statement once, so a file saved
         # earlier in this run covers this plan, and one saved before does
@@ -909,7 +943,7 @@ class App:
         doc.text_sha256 = digest
         if len(named) < 2:
             return out_path
-        label = site.combined_label(named, site.employer_name(page), text)
+        label = site.combined_label(named, site.employer_name(page) if page is not None else "", text)
         suffix = " - " + doc.account
         base = doc.summary[:-len(suffix)] if doc.account and doc.summary.endswith(suffix) else doc.summary
         own_summary = doc.summary
@@ -929,6 +963,149 @@ class App:
         doc.pdf_path, doc.pdf_filename = str(out_path), out_path.name
         log.info("%s %s names %d plans", doc.title, doc.date, len(named))
         return out_path
+
+    def _names_its_plan(self, text: str, doc: Document, plans) -> tuple:
+        """The plans of the list a statement's text names, and why it names
+        none when it does not. By their names (site.plans_named), or for a
+        statement that gives no plan's name, its own plan by its type and
+        employer (site.named_by_type)."""
+        named = site.plans_named(text, plans, chosen=doc.plan)
+        if named:
+            return named, ""
+        by_type, why = site.named_by_type(text, plans, doc.plan)
+        if not by_type:
+            return [], why
+        log.info("%s %s names its plan by its type and employer", doc.title, doc.date)
+        return [self._plans_by_digest[doc.plan]], ""
+
+    def _set_aside(self, doc: Document, path: Path) -> None:
+        """The statement at `path`, which does not name the plan it was made
+        for, set aside for review as the wrong document, in Manual Review."""
+        self.stats["wrong_document"] = self.stats.get("wrong_document", 0) + 1
+        self.stats["manual_review"] += 1
+        if path.parent != self.paths.manual_review:
+            quarantine = unique_path(self.paths.manual_review, path.name,
+                                     self.config["max_path_length"])
+            try:
+                path.replace(quarantine)
+                path = quarantine
+            except OSError:
+                pass
+        doc.held = False
+        doc.pdf_path, doc.pdf_filename = str(path), path.name
+        self._record(doc, State.NEEDS_MANUAL_REVIEW,
+                     notes="the statement does not name the plan it was made for")
+        self._write_row(doc, "Wrong plan", "Needs Manual Review")
+        self.write_failure('check the statement names its plan',
+                           'the statement did not name the plan it was made for')
+        print("  !! The statement does not name its plan. Moved to Manual Review.")
+
+    def _hold(self, doc: Document, out_path: Path, why: str) -> bool:
+        """A statement that may name its plan by type and employer once a
+        plan nothing places yet is placed by a combined statement read later
+        (site.note_combined), held in Manual Review and recorded as needing
+        review, so it is never filed unjudged, and as held, so each run that
+        can settle it judges it again where it waits (_judge_held). False,
+        and nothing held, when it cannot be moved there."""
+        held = unique_path(self.paths.manual_review, out_path.name, self.config["max_path_length"])
+        try:
+            out_path.replace(held)
+        except OSError:
+            return False
+        log.info("%s %s waits for a statement that places another plan: %s", doc.title, doc.date, why)
+        doc.held = True
+        doc.pdf_path, doc.pdf_filename = str(held), held.name
+        self._record(doc, State.NEEDS_MANUAL_REVIEW, notes=HELD)
+        print("  Its plan cannot be told yet. Held in Manual Review until a later statement can tell.")
+        return True
+
+    def _place_from_saved(self, plans) -> None:
+        """Statements naming other plans saved before, this run or an
+        earlier one, read again so they may place a plan (site.note_combined).
+        Each counts only while its file is there and its record's employer,
+        the one the header named for its plan when it was made, is the one
+        the header names for that plan this run. Nothing else is kept from
+        run to run, and the plans it names are found by the names on this
+        run's list, so a plan the list no longer has places nothing."""
+        for rec in list(self.progress.data.values()):
+            if not (isinstance(rec, dict) and rec.get("employer") and rec.get("downloaded_ok") is True
+                    and rec.get("plan") in self._plans_by_digest):
+                continue
+            if site.employer_of(self._plans_by_digest[rec["plan"]]) != rec["employer"]:
+                continue
+            path = Path(str(rec.get("pdf_path") or ""))
+            if path.is_file():
+                site.note_combined(receipt_pdf.pdf_text(path), rec["plan"], plans)
+
+    def _judge_held(self) -> None:
+        """Each statement held, this run or before, judged again at the end
+        of a run, where it waits in Manual Review, once this run has listed
+        the plans and shown its plan. Filed when it now names its plan, set
+        aside as the wrong document when it now cannot, and left held while
+        it still waits only on a plan nothing places. It is moved out of
+        Manual Review only once it is found to name its plan."""
+        if not self._plans_by_digest:
+            return
+        plans = list(self._plans_by_digest.values())
+        if any(isinstance(rec, dict) and rec.get("held") is True
+               for rec in list(self.progress.data.values())):
+            self._place_from_saved(plans)
+        waiting = 0
+        for key, rec in list(self.progress.data.items()):
+            if not (isinstance(rec, dict) and rec.get("held") is True
+                    and rec.get("plan") in self._plans_by_digest):
+                continue
+            at = Path(str(rec.get("pdf_path") or ""))
+            if not at.is_file():
+                # Gone, so it counts as not done and is made again.
+                continue
+            if not site.employer_of(self._plans_by_digest[rec["plan"]]):
+                waiting += 1
+                continue
+            doc = Document.from_dict(rec)
+            doc.notes = "; ".join(n for n in (doc.notes or "").split("; ") if n and n != HELD)
+            try:
+                text = receipt_pdf.pdf_text(at)
+                if not text.strip():
+                    # Not read this time, so not judged on nothing.
+                    log.warning("%s %s held, and its text could not be read", doc.title, doc.date)
+                    waiting += 1
+                    continue
+                named, why = self._names_its_plan(text, doc, plans)
+                if doc.plan not in {p["digest"] for p in named}:
+                    if why.startswith(site.EMPLOYER_NOT_KNOWN):
+                        log.info("%s %s still waits: %s", doc.title, doc.date, why)
+                        waiting += 1
+                        continue
+                    log.info("%s %s names no plan by name, nor by type and employer: %s",
+                             doc.title, doc.date, why)
+                    self._set_aside(doc, at)
+                    continue
+                filename = build_pdf_filename(doc.date, doc.summary, "", record=doc)
+                back = unique_path(self.paths.folder_for(doc.category), filename,
+                                   self.config["max_path_length"],
+                                   distinguisher=(doc.document_id or "")[-6:])
+                try:
+                    at.replace(back)
+                except OSError:
+                    # Open elsewhere, say. It names its plan and waits to be
+                    # filed by the next run.
+                    log.warning("could not file the held statement for %s", key)
+                    waiting += 1
+                    continue
+                doc.held = False
+                doc.pdf_path, doc.pdf_filename = str(back), back.name
+                final = self._own_or_combined(None, doc, back, hold=False)
+                if final is not None:
+                    self._saved(doc, final)
+            except Exception as e:
+                log.exception("Failed on %s", key)
+                self._record(doc, State.FAILED, notes=str(e))
+                self.stats["failed"] += 1
+        if waiting:
+            self.stats["manual_review"] += waiting
+            print(f"\n{waiting} statement(s) still held in Manual Review, each waiting on a plan")
+            print("whose employer no statement has placed. Each is judged again on a later run.")
 
     def _same_period(self, rec: dict, doc: "Document") -> bool:
         return (rec.get("category") == doc.category and rec.get("date") == doc.date
