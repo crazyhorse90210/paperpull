@@ -1,4 +1,4 @@
-Affirm STATEMENTS  -  commands   (READ-ONLY)
+Affirm LOAN AGREEMENTS  -  commands   (READ-ONLY)
 ============================================================
 Run these from the PaperPull folder (paperpull.bat on Windows,
 ./paperpull on macOS). login.bat is the one double-click that stays.
@@ -13,16 +13,17 @@ Run these from the PaperPull folder (paperpull.bat on Windows,
   Re-check PDFs   paperpull affirm verify              paperpull affirm verify --account spouse
 
 FLOW:  login.bat  ->  paperpull affirm diagnose  ->  paperpull affirm pilot  ->  paperpull affirm all
-Sign in, open your Documents/Statements area, keep the browser OPEN,
-do the 2FA yourself.
+Sign in yourself in the window login.bat opens, with your phone number
+and the text-message code, and keep it OPEN.
 
-READ-ONLY: downloads participant statements and tax forms only. It
-NEVER moves money between funds, changes contributions, withdraws,
-takes a loan, changes beneficiaries, or changes any setting.
+READ-ONLY. It downloads loan agreements only, one per loan. It NEVER
+makes a payment, sets up autopay, stores a card or bank account, takes
+a new loan, or changes contact details.
 
-Scope: quarterly and annual participant statements + 1099-R.
-Tax forms contain your SSN - handle accordingly.
+Scope is each loan's agreement, the Truth in Lending disclosure under
+Loan terms, settled loans included. A pay-over-time account has no
+monthly statement.
 
-Your files: this folder (Statements\, Tax Documents\).
+Your files are in this folder, under Loan Agreements\.
 Spouse's:  "Affirm Statements - spouse".
 Full command reference: COMMANDS.txt in the parent folder.

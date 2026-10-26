@@ -13,16 +13,16 @@ Run these from the PaperPull folder (paperpull.bat on Windows,
   Re-check PDFs   paperpull fairfaxwater verify              paperpull fairfaxwater verify --account spouse
 
 FLOW:  login.bat  ->  paperpull fairfaxwater diagnose  ->  paperpull fairfaxwater pilot  ->  paperpull fairfaxwater all
-Sign in, open your Documents/Statements area, keep the browser OPEN,
-do the 2FA yourself.
+Sign in yourself in the window login.bat opens, and keep it OPEN.
 
-READ-ONLY: downloads participant statements and tax forms only. It
-NEVER moves money between funds, changes contributions, withdraws,
-takes a loan, changes beneficiaries, or changes any setting.
+READ-ONLY. It downloads water bills only. It NEVER pays a bill, sets
+up autopay, stores a card or bank account, starts or stops service, or
+changes paperless or contact settings.
 
-Scope: quarterly and annual participant statements + 1099-R.
-Tax forms contain your SSN - handle accordingly.
+Scope is the quarterly bills that have a PDF, and Fairfax Water keeps
+those for the last year only, so run it every few months to keep them
+all.
 
-Your files: this folder (Statements\, Tax Documents\).
+Your files are in this folder, under Statements\.
 Spouse's:  "Fairfax Water Statements - spouse".
 Full command reference: COMMANDS.txt in the parent folder.
