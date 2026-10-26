@@ -84,6 +84,14 @@ All notable changes to PaperPull are recorded here. Versioning follows
   choose them in, and a year that is turned off are left as they were. A
   statement type the filter would not take is still passed over quietly,
   since an account may hold none of that type.
+- **Newrez never calls its document list whole with a statements page or
+  a year left out.** The monthly and yearly statements pages are opened by
+  their addresses, and the monthly page's year picker is walked. A page
+  whose address would not open and a year the picker offered whose choice
+  would not take were passed over, and the list was still noted as read
+  whole. Now the run keeps what it read and takes it, writes a failure
+  file and stops at its end rather than finish. A year whose list never
+  shows is left as it was, since a year with no statement never shows one.
 
 ## [0.58.0] - 2026-10-24
 
