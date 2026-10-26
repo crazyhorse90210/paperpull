@@ -456,8 +456,9 @@ class App:
         # statements can share a title, a day and an account name. A number
         # given stays with the statement it was given to, found by its docId
         # first, and a row that cannot be told apart from one saved is not
-        # taken for it (paperpull_core.keys.told_apart).
-        alike = ("title", "date", "account")
+        # taken for it (paperpull_core.keys.told_apart). Numbered by the
+        # whole key, the category with it, as every app's census asks.
+        alike = ("category", "title", "date", "account")
         for d, (occ, sure) in zip(raw, _told_apart(raw, self.discovery.data, fields=alike,
                                                    saved=self.progress.data)):
             d["occurrence"] = occ

@@ -151,7 +151,7 @@ def test_a_command_reaching_two_suites_stops_before_it_collects(checkout, where,
 def test_the_refusal_names_the_runner_suites_and_a_suite_by_hand(checkout):
     code, out = _pytest(checkout, "core/tests", "apps/two")
     assert code == 4, out
-    assert "python tools/run_all_tests.py --suites core,core-browsers,two" in out
+    assert "python tools/run_all_tests.py --suites core,core-censuses,core-browsers,two" in out
     assert "    cd apps/two\n    python -m pytest tests" in out
 
 
@@ -189,13 +189,13 @@ def test_the_runner_runs_each_suite_as_it_did(checkout, suite, part):
 def test_every_suite_the_runner_runs_is_one_suite_here():
     """The runner starts each suite's pytest in that suite's folder with no
     path, so pytest is given the folder. Each one reaches exactly one suite,
-    the core's two parts the same one and every other suite its own."""
+    the core's three parts the same one and every other suite its own."""
     seen = {}
     for name, folder, _kind in rat.suites(False):
         reached = guard.suites_of(folder)
         assert len(reached) == 1, (name, reached)
         seen.setdefault(reached[0], set()).add(name)
-    assert seen.pop("core") == {"core", "core-browsers"}
+    assert seen.pop("core") == set(rat.CORE_PARTS)
     assert all(len(names) == 1 for names in seen.values()), seen
 
 

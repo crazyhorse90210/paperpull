@@ -54,10 +54,10 @@ def suites_of(path) -> list:
 
 def runner_names(suites) -> list:
     """The names tools/run_all_tests.py --suites takes for these. The core
-    runs there as two suites."""
+    runs there as three suites (CORE_PARTS there)."""
     out = []
     for s in suites:
-        out += ["core", "core-browsers"] if s == "core" else [s.split("/")[-1]]
+        out += ["core", "core-censuses", "core-browsers"] if s == "core" else [s.split("/")[-1]]
     return out
 
 
