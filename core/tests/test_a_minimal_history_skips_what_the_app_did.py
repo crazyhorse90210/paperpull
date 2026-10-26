@@ -168,10 +168,12 @@ WALKS_DECIDE_NOTHING = {
 CORE_WALKS = {
     "keys._identity": CUT_KEY,
     "keys.told_apart":
-        "reads a saved record's id only under a key discovery holds, and discovery never "
-        "moves with a history, whole or minimal. So the first run after a move numbers "
-        "same-day twins by place either way, and from then on discovery holds the id each "
-        "was listed under, which it asks after the saved record's",
+        "reads a saved record's id, which --minimal leaves out. Discovery never moves with "
+        "a history, whole or minimal, so after a move every saved record is one discovery "
+        "lacks, found by its key through the app's key_of and given the number its key "
+        "holds. So the first run after a move numbers same-day twins as they were saved "
+        "with or without the ids, and from then on discovery holds the id each was listed "
+        "under, which it asks after the saved record's",
 }
 
 
