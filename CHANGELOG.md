@@ -60,6 +60,14 @@ All notable changes to PaperPull are recorded here. Versioning follows
   next run reads the list again. A year the open picker does not list, an
   option that is turned off and one the guard refuses are never chosen,
   and are left as they were.
+- **Discover credit cards never call the statement list whole with an
+  account or a year left out.** When the statement links read nothing, the
+  page's text is read under each account and year its dropdowns offer. An
+  account or a year whose choice did not take was passed over, and the
+  list was still noted as read whole. Now the run keeps what it read and
+  takes it, writes a failure file and stops at its end rather than finish,
+  and that reading never chooses an option that is turned off or that the
+  guard refuses.
 
 ## [0.58.0] - 2026-10-24
 
