@@ -7,7 +7,13 @@ All notable changes to PaperPull are recorded here. Versioning follows
 - **MINOR**, a new app, or a cross-app feature
 - **MAJOR**, breaking changes (repo layout, config format, removing an app)
 
-## [Unreleased]
+## [0.59.1] - 2026-10-27
+
+Bank of America saves statements when the page's Download PDF links have
+no address of their own, by pressing one once and learning how the page
+asks for a PDF. A failure file no longer calls a list answer empty for an
+empty errors list beside its rows, and one bad field no longer silences
+its summary.
 
 ### Fixed
 - **Bank of America learns how its page asks for a PDF when the Download
