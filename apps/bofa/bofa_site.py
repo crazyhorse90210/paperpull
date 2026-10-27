@@ -151,6 +151,9 @@ MIN_ID = 6
 _BROWSER_HEADERS = re.compile(r"^(:.*|cookie|host|content-length|connection|origin|referer|"
                               r"user-agent|accept-encoding|accept-language|priority|"
                               r"sec-.*|upgrade-insecure-requests|dnt)$", re.I)
+# Headers that say what a call sends and takes back. A PDF call keeps its
+# own when its other headers are taken fresh from the list call.
+_WHAT_IS_SENT = re.compile(r"^(content-.*|accept)$", re.I)
 # Bank of America's bot protection is not known, so the list is asked for
 # at a person's pace, account by account and year by year.
 PACE_MS = 1200
@@ -1017,7 +1020,7 @@ def _press_and_hear(page, el, names) -> dict:
             # waits for a download.
             intake.discard(d, page)
         for p in heard["tabs"]:
-            if _opened_by_the_press(p, page):
+            if _opened_by_the_press(p, page, heard):
                 try:
                     p.close()
                 except Exception:
@@ -1039,10 +1042,11 @@ def _on_the_site(url: str) -> bool:
     return is_safe_url(url) or (url.startswith("blob:") and is_safe_url(url[5:]))
 
 
-def _opened_by_the_press(tab, page) -> bool:
+def _opened_by_the_press(tab, page, heard) -> bool:
     """A tab that opened while the press was heard, from the statements
-    page, or on the bank's site, never the statements tab. A blank tab
-    the statements page did not open can be the person's own, and is left."""
+    page, or one at the very address of a PDF the press brought, never the
+    statements tab. Any other tab, a blank one or one on the bank's site,
+    can be the person's own, opened meanwhile, and is left."""
     if tab is page:
         return False
     try:
@@ -1050,7 +1054,10 @@ def _opened_by_the_press(tab, page) -> bool:
             return True
     except Exception:
         pass
-    return _on_the_site(_url_of(tab))
+    url = _url_of(tab)
+    brought = ({_url_of(r) for r in heard.get("pdf", ())}
+               | {_download_address(d) for d in heard.get("downloads", ())})
+    return _on_the_site(url) and url in brought
 
 
 def _sends(req) -> Tuple[dict, str]:
@@ -1156,7 +1163,9 @@ def learn_pdf_call(page, drawn: list, rows: list, call: Call) -> Tuple[Optional[
     run. Raises NotThere, SessionExpired, and pressing.Stop."""
     kept = _pdf_learned.get("pdf")
     if kept is not None:
-        fresh = {k.lower(): v for k, v in call.headers.items()}
+        # A form or a GET is still sent as one and still takes a PDF, so only
+        # the session's own headers are taken from the list call.
+        fresh = {k.lower(): v for k, v in call.headers.items() if not _WHAT_IS_SENT.match(k)}
         kept.headers = {k: fresh.get(k.lower(), v) for k, v in kept.headers.items()}
         return kept, {"pdf_link": "kept"}
     if _pdf_learned.get("pressed"):

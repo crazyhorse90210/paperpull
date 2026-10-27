@@ -72,6 +72,8 @@ async function openPdf(r) {
     a.remove();
   } else if (HOW === 'tab') {
     window.open('/sample/viewdoc?doc=' + encodeURIComponent(r.docId), '_blank');
+  } else if (HOW === 'alone') {
+    window.open('/sample/viewdoc?doc=' + encodeURIComponent(r.docId), '_blank', 'noopener');
   } else if (HOW === 'view') {
     location.href = '/sample/viewdoc?doc=' + encodeURIComponent(r.docId);
   } else {
@@ -193,10 +195,11 @@ def test_a_link_that_opens_its_pdf_by_a_script_is_pressed_once_and_its_call_lear
         context.close()
 
 
-@pytest.mark.parametrize("how", ["tab", "view"])
+@pytest.mark.parametrize("how", ["tab", "alone", "view"])
 def test_a_pdf_shown_in_the_viewer_is_learned_and_the_tab_put_back(viewer, how):
-    """In a tab of its own, which is closed, or in the statements tab, which
-    is taken back to the statements page."""
+    """In a tab of its own, which is closed, opened with no way back to the
+    page too, or in the statements tab, which is taken back to the
+    statements page."""
     context, page, seen = statements_page(viewer, how)
     try:
         call = site.learn(page)

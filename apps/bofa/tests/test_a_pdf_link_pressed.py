@@ -131,6 +131,29 @@ def test_a_later_reload_presses_nothing_again_and_takes_the_headers_fresh():
     assert page.pdf_calls[-1]["headers"]["x-standin-csrf"] == "TOKEN-U"
 
 
+def test_a_kept_form_call_still_sends_a_form_and_takes_a_pdf_after_fresh_headers():
+    """The list call is JSON, so a form call taking its content-type and
+    accept would send every later statement's form as JSON (0.59.1 review)."""
+    page = script_page()
+    form = "docId=%s&lang=en"
+    page.press_calls = lambda row: [{
+        "method": "POST", "url": sb.PDF_CALL_URL, "body": form % row["docId"],
+        "headers": {"content-type": "application/x-www-form-urlencoded", "accept": "application/pdf",
+                    "x-standin-csrf": "TOKEN-T"},
+        "answer": "application/pdf"}]
+    assert site.learn(page).facts["pdf_url_kind"] == "form"
+    page.headers = dict(page.headers, **{"x-standin-csrf": "TOKEN-U",
+                                         "accept": "application/json, text/plain, */*"})
+    site._learned["at"] = 0.0
+    assert site.learned(page, form=True).facts["pdf_link"] == "kept"
+    site.document_bytes(page, account_ref="K-ALPHA-0001", date="2026-02-15",
+                        document_id="DOC000000000102", year="2026")
+    sent = page.pdf_calls[-1]
+    assert sent["body"] == form % "DOC000000000102"
+    assert sent["headers"] == {"content-type": "application/x-www-form-urlencoded",
+                               "accept": "application/pdf", "x-standin-csrf": "TOKEN-U"}
+
+
 def test_a_press_that_takes_the_tab_to_its_pdf_goes_back_to_the_statements_page():
     page = script_page()
     page.press_goes_to = "https://secure.bankofamerica.com/sample/viewdoc?doc=DOC000000000101"
@@ -371,14 +394,27 @@ def test_the_link_is_pressed_once_a_run_when_the_page_fails_after_the_press(monk
 
 
 def test_a_tab_the_person_opened_meanwhile_is_left_with_its_download():
+    """On the bank's site too, as one opened by hand in those seconds is
+    (0.59.1 review)."""
     page = script_page()
     mine = sb.Tab(page, "about:blank", ours=False, downloads=["https://example.test/report.pdf"])
-    theirs_on_the_site = sb.Tab(page, "https://www.bankofamerica.com/", ours=False)
-    page.press_tabs = lambda row: [mine, theirs_on_the_site]
+    mine_on_the_site = sb.Tab(page, "https://secure.bankofamerica.com/myaccounts/brain/redirect.go",
+                              ours=False)
+    page.press_tabs = lambda row: [mine, mine_on_the_site]
     call = site.learn(page)
     assert call.pdf is not None and call.facts["downloads"] == 0
-    assert page.tabs_closed == ["https://www.bankofamerica.com/"]
+    assert page.tabs_closed == []
     assert not [d for d in page.downloads_ended if "example.test" in d[1]]
+
+
+def test_a_tab_opened_with_no_opener_at_the_pdf_brought_is_closed():
+    """As a link opening in a new tab can be, with no way back to the page."""
+    page = script_page()
+    url = "https://secure.bankofamerica.com/sample/viewdoc?doc=%s&inline=1"
+    page.press_calls = lambda row: [get_call(url % row["docId"])]
+    page.press_tabs = lambda row: [sb.Tab(page, url % row["docId"], ours=False)]
+    assert site.learn(page).pdf is not None
+    assert page.tabs_closed == [url % "DOC000000000101"]
 
 
 def test_a_value_that_would_change_the_call_is_never_written_as_it_is():
