@@ -52,6 +52,19 @@ HOW THE STATEMENTS PAGE WORKS, as the recordings showed it
   first, the ones they were drawn from. Login and Discover only list, and
   press nothing.
 
+  The second real run (2026-10-27) met a Download PDF link whose address
+  was "#" or nothing, with no statement's id in it or in a data- field, so
+  a script of the page's own opens the PDF. When every link the page drew
+  is like that, one of them is pressed, once a run, and the call it makes
+  for its PDF is heard, at the browser context so a tab it opens is heard
+  too. That call has to be one GET or one POST of JSON or a form, on the
+  bank's site, naming no change, and hold exactly one listed statement's
+  docId, and it is learned as a form the way a link's address is. The PDF
+  the press brings is never kept. A download it starts is cancelled and
+  deleted and a tab it opens closed. The form is asked once more for the
+  statement pressed, from inside the page, and kept only when that answers
+  with a PDF. Each statement's PDF is then asked with its own row's call.
+
   IDENTITY is the account, the date and the title, with the docId as a
   hint (paperpull_core.keys.told_apart numbers two of one day and one
   account name). A PDF is filed only when its text names its own row
@@ -60,16 +73,22 @@ HOW THE STATEMENTS PAGE WORKS, as the recordings showed it
 
 SAFETY. A bank, with checking, savings, credit cards, Zelle, transfers
 and bill pay.
-  Strictly READ-ONLY. The one press is the Statements heading of the
-  statements page, when it is shut, the page shows no Download PDF link
-  and a statement is to be downloaded (or Diagnose surveys the page),
-  through is_statements_heading (the guard below plus its whole name) and
-  paperpull_core.pressing, which stops the run when anything is over it.
-  Nothing else is clicked, typed, selected, submitted or confirmed. The page
-  is reloaded to hear its list call, at the start of a run and again when
-  what was heard is FRESH_SECONDS old, and lists and PDFs are asked for from
-  inside the signed-in page, every address on bankofamerica.com. The guard
-  below is also what Record and Diagnose mark each control against.
+  Strictly READ-ONLY. Two presses, each through paperpull_core.pressing,
+  which stops the run when anything is over the control. The Statements
+  heading of the statements page, when it is shut, the page shows no
+  Download PDF link and a statement is to be downloaded (or Diagnose
+  surveys the page), through is_statements_heading (the guard below plus
+  its whole name). And one statement's Download PDF link, once a run, when
+  a statement is to be downloaded and every link's address is a script,
+  through is_pdf_link (the guard below on its words beside the bank's own
+  names for the statements and accounts it listed), a link and not a
+  button, read again right before the press. Diagnose never presses a
+  link. Nothing else is clicked, typed, selected, submitted or confirmed.
+  The page is reloaded to hear its list call, at the start of a run and
+  again when what was heard is FRESH_SECONDS old, a tab the link's press
+  took to its PDF is taken back, and lists and PDFs are asked for from
+  inside the signed-in page, every address on bankofamerica.com. The guards
+  below are also what Record and Diagnose mark each control against.
 """
 from __future__ import annotations
 
@@ -120,6 +139,10 @@ DOWNLOAD_LINK_RE = re.compile(r"^\s*Download PDF for\b", re.I)
 STATEMENTS_HEADING = "Statements"
 # How long the rows under it may take to draw once it is opened.
 OPEN_WAIT_MS = 15000
+# How long a press of a Download PDF link may take to bring its PDF, and
+# how long after it comes another call is still listened for.
+PRESS_WAIT_MS = 20000
+SETTLE_MS = 1000
 # The statements category, by its name in documentCategoryList.
 STATEMENTS_CATEGORY_RE = re.compile(r"^\s*statements?\s*$", re.I)
 # A docId shorter than this could sit inside an address by chance.
@@ -244,8 +267,32 @@ def is_statements_heading(name: str) -> bool:
     return name == STATEMENTS_HEADING and is_safe_control(name)
 
 
+def _beside_names(name: str, names=()) -> str:
+    """A control's words with the bank's own names for the statements and
+    accounts it listed taken out, each standing whole, longest first."""
+    rest = re.sub(r"\s+", " ", name or "").strip()
+    for n in sorted({re.sub(r"\s+", " ", str(x or "")).strip() for x in names or ()},
+                    key=len, reverse=True):
+        if len(n) >= 3:
+            rest = _whole(n).sub(" ", rest)
+    return re.sub(r"\s+", " ", rest).strip()
+
+
+def is_pdf_link(name: str, names=()) -> bool:
+    """A statement's Download PDF link, by its words. The bank's own names
+    for the statements and accounts it listed, `names`, are taken out first,
+    since a card called Cash Rewards is named so and is not a control that
+    redeems anything, and what is left has to start with Download PDF for
+    and pass the guard above whole. With no names, the whole name does."""
+    name = re.sub(r"\s+", " ", name or "").strip()
+    if len(name) > 300 or not DOWNLOAD_LINK_RE.match(name):
+        return False
+    rest = _beside_names(name, names)
+    return bool(DOWNLOAD_LINK_RE.match(rest)) and is_safe_control(rest)
+
+
 # The only controls a run presses, each through its own guard.
-PRESS_GUARDS = (is_statements_heading,)
+PRESS_GUARDS = (is_statements_heading, is_pdf_link)
 
 
 def _words():
@@ -425,6 +472,9 @@ class Call:
         # Whether the PDF form was looked for, the Statements heading opened
         # when it was shut, which a run that only lists does not do.
         self.form_tried = False
+        # The call one Download PDF link's press made for its PDF, as a
+        # form (PdfCall), when the links hide their address.
+        self.pdf = None
         # What the page's own answer said of itself, which every other
         # answer has to say too (_post_list).
         self.status = answer.get("status")
@@ -674,17 +724,13 @@ def _whole(value: str) -> re.Pattern:
     return re.compile(r"(?<![A-Za-z0-9])%s(?![A-Za-z0-9])" % re.escape(value))
 
 
-def template_of(href: str, row: dict) -> Optional[str]:
-    """The address of a row's link as a form, each of the row's own values
-    in it marked by the name of its field, or None when the row's docId is
-    not in it whole. Longest values first, so one value inside another is
-    never taken for it."""
-    doc_id = row.get("docId")
-    if not isinstance(doc_id, str) or len(doc_id) < MIN_ID:
-        return None
+def _marked(text: str, row: dict) -> Tuple[str, set]:
+    """`text` with each of the row's own values in it marked by the name of
+    its field, and the names marked. Longest values first, so one value
+    inside another is never taken for it."""
     fields = sorted(((k, v) for k, v in row.items() if isinstance(v, str) and len(v) >= MIN_ID),
                     key=lambda kv: -len(kv[1]))
-    out = href
+    out = text
     used = set()
     for name, value in fields:
         enc = quote(value, safe="")
@@ -694,6 +740,17 @@ def template_of(href: str, row: dict) -> Optional[str]:
         elif enc != value and _whole(enc).search(out):
             out = _whole(enc).sub(lambda m: _marker(name, True), out)
             used.add(name)
+    return out, used
+
+
+def template_of(href: str, row: dict) -> Optional[str]:
+    """The address of a row's link as a form, each of the row's own values
+    in it marked by the name of its field, or None when the row's docId is
+    not in it whole."""
+    doc_id = row.get("docId")
+    if not isinstance(doc_id, str) or len(doc_id) < MIN_ID:
+        return None
+    out, used = _marked(href, row)
     return out if "docId" in used else None
 
 
@@ -746,6 +803,403 @@ def learn_template(rows: list, links: list) -> Tuple[Optional[str], int]:
     return forms.pop(), matched
 
 
+# ---------------------------------------------------------------------------
+# A Download PDF link whose address is a script
+# ---------------------------------------------------------------------------
+# What a link a script of the page's own opens has for an address. Nothing,
+# a place on the page itself, or the script.
+def _opens_by_script(raw) -> bool:
+    raw = str(raw or "").strip()
+    return not raw or raw.startswith("#") or raw.lower().startswith("javascript:")
+
+
+def _all_by_script(facts: dict) -> bool:
+    """Every Download PDF link the page drew opens its PDF by a script and
+    none shows a listed statement's id in its address."""
+    n = facts.get("pdf_links") or 0
+    return bool(n) and not facts.get("links_with_an_id") and (
+        (facts.get("links_to_this_page") or 0) + (facts.get("links_to_no_page") or 0) == n)
+
+
+class PdfCall:
+    """The call a press of one Download PDF link made for its PDF, its
+    address and body as forms (template_of, the row's own values marked),
+    kept in memory for this run only and never written anywhere."""
+
+    def __init__(self, method, url, body, headers, host):
+        self.method = method         # "GET" or "POST"
+        self.url = url
+        self.body = body             # "" when the call sent none
+        self.headers = headers
+        self.host = host
+
+    def filled(self, row: dict) -> Optional[Tuple[str, str]]:
+        """A row's own address and body in the form, or None when the row
+        lacks a field the form needs or holds a value it cannot write."""
+        url = fill(self.url, row)
+        body = fill(self.body, row) if self.body else ""
+        if url is None or body is None:
+            return None
+        return url, body
+
+
+# Kept for the run, so a later reload is not a reason to press again, and a
+# press whose call was not learned, or that something failed after, is not
+# made twice. The list call is heard again on a reload, and the headers both
+# calls send are taken from it.
+_pdf_learned = {"pdf": None, "pressed": False, "facts": None}
+
+
+def _names_of(rows: list, accounts: list) -> list:
+    """The bank's own names for the statements and accounts it listed."""
+    out = []
+    for r in list(rows or ()) + list(accounts or ()):
+        if isinstance(r, dict):
+            out.extend(str(r.get(k) or "") for k in ("docDisplayName", "accountDisplayName"))
+    return [n for n in out if n.strip()]
+
+
+def _a_link_to_press(el, names) -> bool:
+    """A link of the page's own, not a button or a field, whose address is
+    a script, with a label that is a statement's Download PDF link and no
+    label any blocklist refuses beside the bank's own names. One that
+    cannot be read is not pressed."""
+    try:
+        if str(el.evaluate("e => e.tagName") or "").upper() != "A":
+            return False
+        if not _opens_by_script(el.get_attribute("href")):
+            return False
+        labels = control_labels(el)
+    except Exception:
+        return False
+    return (bool(labels) and any(is_pdf_link(x, names) for x in labels)
+            and not _any_refuses([_beside_names(x, names) for x in labels]))
+
+
+def pdf_link_to_press(page, drawn: list, names) -> Tuple[Optional[object], str]:
+    """The one Download PDF link to press, as an element, and how it stood,
+    "chosen", or with nothing to press, "refused" (no link this app
+    presses), "several" (each it would press shares its name with another
+    link) or "not found". The first link in the page's order that fits."""
+    took = [x for x in drawn if _opens_by_script(x.get("raw")) and is_pdf_link(x.get("name"), names)]
+    if not took:
+        return None, "refused"
+    several = False
+    for x in took:
+        try:
+            loc = page.get_by_role("link", name=x["name"], exact=True)
+            n = loc.count()
+            if n > 1:
+                # Which of them Playwright would press cannot be told.
+                several = True
+                continue
+            el = loc.first.element_handle(timeout=5000) if n == 1 else None
+        except Exception as e:
+            log.info("a Download PDF link could not be read: %s", type(e).__name__)
+            continue
+        if el is not None and _a_link_to_press(el, names):
+            return el, "chosen"
+    return None, "several" if several else "not found"
+
+
+def _download_address(d) -> str:
+    try:
+        return str(d.url or "")
+    except Exception:
+        return ""
+
+
+def _press_and_hear(page, el, names) -> dict:
+    """Press one Download PDF link and hear what it asks the bank for. The
+    PDF it brings is never kept. A download it starts is cancelled and its
+    file deleted, and a tab it opens is closed. Raises NotThere when the
+    tab left the statements page before the press, and pressing.Stop when
+    something is over the link."""
+    heard = {"calls": [], "pdf": [], "downloads": [], "tabs": []}
+
+    def on_request(req):
+        try:
+            if is_safe_url(req.url or "") and len(heard["calls"]) < 200:
+                heard["calls"].append(req)
+        except Exception:
+            pass
+
+    def on_response(r):
+        try:
+            if not is_safe_url(r.url or ""):
+                return
+            h = r.headers or {}
+            kind = str(h.get("content-type") or "").lower()
+            said = str(h.get("content-disposition") or "").lower()
+            if "pdf" in kind or ".pdf" in said:
+                heard["pdf"].append(r.request)
+        except Exception:
+            pass
+
+    def on_download(d):
+        try:
+            heard["downloads"].append(d)
+        except Exception:
+            pass
+
+    def on_tab_download(d):
+        # A tab that opened meanwhile can be the person's own, so only a
+        # download from the bank's site is the press's.
+        try:
+            if _on_the_site(_download_address(d)):
+                heard["downloads"].append(d)
+        except Exception:
+            pass
+
+    def on_page(p):
+        try:
+            heard["tabs"].append(p)
+            p.on("download", on_tab_download)
+        except Exception:
+            pass
+
+    def on_moved(frame):
+        try:
+            if frame == page.main_frame:
+                heard["moved"] = True
+        except Exception:
+            pass
+
+    # At the context, so a call made for a tab the press opens is heard from
+    # its first answer on.
+    try:
+        ctx = page.context
+    except Exception:
+        ctx = None
+    hooks = ([(ctx, "request", on_request), (ctx, "response", on_response), (ctx, "page", on_page)]
+             if ctx is not None else [(page, "request", on_request), (page, "response", on_response)])
+    hooks += [(page, "download", on_download), (page, "framenavigated", on_moved)]
+    for source, event, fn in hooks:
+        source.on(event, fn)
+    try:
+        # Read once more right before the press, as the heading is.
+        if not on_statements_page(page):
+            raise NotThere("the tab left Statements & Documents")
+        if not _a_link_to_press(el, names):
+            heard["refused_late"] = True
+            return heard
+        # Pressed for this run from here on, whatever happens after, so it is
+        # never pressed twice in one run.
+        _pdf_learned["pressed"] = True
+        pressing.click(page, el, css=pressing.LINKS, what="a statement's Download PDF link",
+                       words=_words(), step="download a statement")
+        waited = 0
+        while waited < PRESS_WAIT_MS and not heard["pdf"] and not any(
+                is_safe_url(_download_address(d)) for d in heard["downloads"]):
+            page.wait_for_timeout(250)
+            waited += 250
+        if any(_moves_the_tab(page, r) for r in heard["pdf"]):
+            # The statements tab itself went to the PDF, which it shows only
+            # once it has moved, a moment after the answer, unless the PDF
+            # is downloaded instead. Waited for, so the tab is taken back
+            # to the statements page before anything is asked from it.
+            waited = 0
+            while waited < PRESS_WAIT_MS and not heard.get("moved") and not heard["downloads"]:
+                page.wait_for_timeout(250)
+                waited += 250
+        if heard["pdf"] or heard["downloads"]:
+            # A press that makes two calls for its PDF is not one this app
+            # can ask again, so the second is listened for too.
+            page.wait_for_timeout(SETTLE_MS)
+    finally:
+        for source, event, fn in hooks:
+            try:
+                source.remove_listener(event, fn)
+            except Exception:
+                pass
+        for d in heard["downloads"]:
+            # Cancelled and deleted, waited for no longer than the core
+            # waits for a download.
+            intake.discard(d, page)
+        for p in heard["tabs"]:
+            if _opened_by_the_press(p, page):
+                try:
+                    p.close()
+                except Exception:
+                    pass
+    return heard
+
+
+def _moves_the_tab(page, req) -> bool:
+    """Whether a call is the statements tab's own going to a new address."""
+    try:
+        return bool(req.is_navigation_request()) and req.frame == page.main_frame
+    except Exception:
+        return False
+
+
+def _on_the_site(url: str) -> bool:
+    """An address on the bank's site, or a blob a page of the site made."""
+    url = str(url or "")
+    return is_safe_url(url) or (url.startswith("blob:") and is_safe_url(url[5:]))
+
+
+def _opened_by_the_press(tab, page) -> bool:
+    """A tab that opened while the press was heard, from the statements
+    page, or on the bank's site, never the statements tab. A blank tab
+    the statements page did not open can be the person's own, and is left."""
+    if tab is page:
+        return False
+    try:
+        if tab.opener() is page:
+            return True
+    except Exception:
+        pass
+    return _on_the_site(_url_of(tab))
+
+
+def _sends(req) -> Tuple[dict, str]:
+    """The headers a call sent that the browser does not set on its own,
+    and its body as text, "" for none, as Playwright holds them already.
+    Never all_headers(), which waits for the browser's own copy, and for a
+    call of a tab the press opened and that is closed now, waits forever."""
+    try:
+        headers = dict(req.headers or {})
+    except Exception:
+        headers = {}
+    try:
+        body = req.post_data or ""
+    except Exception:
+        body = None
+    return ({k: v for k, v in (headers or {}).items() if not _BROWSER_HEADERS.match(k)},
+            body if isinstance(body, str) else None)
+
+
+def _kind_of(method: str, headers: dict, body) -> str:
+    """What a call is, in the failure file's own words. A GET with no body,
+    a POST of JSON or of a form, or anything else, "other"."""
+    if body is None:
+        return "other"
+    sent = next((str(v) for k, v in headers.items() if k.lower() == "content-type"), "").lower()
+    if method == "GET":
+        return "get" if not body else "other"
+    if method == "POST" and body:
+        if "json" in sent:
+            return "json"
+        if "x-www-form-urlencoded" in sent:
+            return "form"
+    return "other"
+
+
+def pdf_call_of(heard: dict, rows: list) -> Tuple[Optional[PdfCall], Optional[dict], dict]:
+    """The one call the press made for its PDF, as a form, the row it was
+    for, and what was heard, as counts and fixed words. A download the
+    press started at an address of the site is that call too. None when
+    the press made no such call, or several, or one that is not a GET or a
+    POST of JSON or a form, that names a change, or that holds no listed
+    statement's id, or more than one statement's."""
+    facts = {"urls_read_after_the_link_was_pressed": len(heard["calls"]),
+             "pdf_files_read": len(heard["pdf"]), "downloads": len(heard["downloads"]),
+             "tabs_opened": len(heard["tabs"])}
+    calls = list(heard["pdf"])
+    for d in heard["downloads"]:
+        url = _download_address(d)
+        if url.startswith("blob:"):
+            facts["downloads_in_the_page"] = facts.get("downloads_in_the_page", 0) + 1
+        elif is_safe_url(url):
+            calls.extend([r for r in heard["calls"] if _url_of(r) == url][-1:])
+    found = {}
+    for req in calls:
+        try:
+            method = (req.method or "").upper()
+        except Exception:
+            method = ""
+        headers, body = _sends(req)
+        found.setdefault((method, _url_of(req), body), (method, _url_of(req), body, headers))
+    facts["pdf_urls"] = len(found)
+    if len(found) != 1:
+        return None, None, facts
+    method, url, body, headers = next(iter(found.values()))
+    kind = facts["pdf_url_kind"] = _kind_of(method, headers, body)
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        parts = None
+    if (kind == "other" or parts is None or parts.scheme != "https" or not is_safe_url(url)
+            or CHANGING_PATH_RE.search(parts.path or "")):
+        facts["pdf_url_refused"] = True
+        return None, None, facts
+    ids = {r["docId"] for r in rows if isinstance(r, dict) and isinstance(r.get("docId"), str)
+           and len(r["docId"]) >= MIN_ID}
+    held = [i for i in sorted(ids) if any(_whole(i).search(t) or _whole(quote(i, safe="")).search(t)
+                                          for t in (url, body))]
+    facts["statements_in_the_pdf_url"] = len(held)
+    if len(held) != 1:
+        return None, None, facts
+    row = next(r for r in rows if isinstance(r, dict) and r.get("docId") == held[0])
+    url_form, in_url = _marked(url, row)
+    body_form, in_body = _marked(body, row)
+    if ("docId" not in (in_url | in_body) or fill(url_form, row) != url
+            or (body and fill(body_form, row) != body)):
+        facts["statements_in_the_pdf_url"] = 0
+        return None, None, facts
+    return PdfCall(method, url_form, body_form, headers, (parts.hostname or "").lower()), row, facts
+
+
+def _url_of(req) -> str:
+    try:
+        return str(req.url or "")
+    except Exception:
+        return ""
+
+
+def learn_pdf_call(page, drawn: list, rows: list, call: Call) -> Tuple[Optional[PdfCall], dict]:
+    """The call a statement's PDF is asked with, learned from one press of
+    a Download PDF link the page drew, when every link's address is a
+    script. It is asked once more, for the statement pressed, from inside
+    the page, and kept only when that answers with a PDF. Learned once a
+    run. Raises NotThere, SessionExpired, and pressing.Stop."""
+    kept = _pdf_learned.get("pdf")
+    if kept is not None:
+        fresh = {k.lower(): v for k, v in call.headers.items()}
+        kept.headers = {k: fresh.get(k.lower(), v) for k, v in kept.headers.items()}
+        return kept, {"pdf_link": "kept"}
+    if _pdf_learned.get("pressed"):
+        # Pressed already this run, and what it brought was not learned.
+        return None, dict(_pdf_learned.get("facts") or {"pdf_link": "pressed"})
+    names = _names_of(rows, call.accounts)
+    el, how = pdf_link_to_press(page, drawn, names)
+    if el is None:
+        return None, {"pdf_link": how}
+    heard = _press_and_hear(page, el, names)
+    if heard.get("refused_late"):
+        return None, {"pdf_link": "refused"}
+    pdf, row, facts = pdf_call_of(heard, rows)
+    facts["pdf_link"] = "pressed"
+    if not on_statements_page(page):
+        # The press opened the PDF in the person's own tab. It is taken
+        # back to the statements page the lists are asked from.
+        facts["back_to_the_page"] = True
+        try:
+            page.go_back(wait_until="domcontentloaded", timeout=30000)
+        except Exception as e:
+            log.info("the statements page could not be gone back to: %s", type(e).__name__)
+        if not on_statements_page(page):
+            raise NotThere("a Download PDF link took the tab off Statements & Documents")
+    if pdf is not None:
+        try:
+            r = _ask_pdf(page, pdf, row)
+        except SessionExpired:
+            # The list answered a moment ago, so a refusal of this one call
+            # says it cannot be asked from the page, not that the session
+            # ended, and signing in again would press the link again for
+            # the same answer.
+            r = None
+        facts["pdf_url_read_again"] = bool(r and r.get("status") == 200 and r.get("b64")
+                                           and intake.decode(r["b64"])[:5] == b"%PDF-")
+        if not facts["pdf_url_read_again"]:
+            pdf = None
+    if pdf is not None:
+        _pdf_learned["pdf"] = pdf
+    _pdf_learned["facts"] = dict(facts)
+    return pdf, facts
+
+
 def _wait_for_links(page, tries: int) -> list:
     """The page's Download PDF links, once it has drawn any, read every
     half second for `tries` times. The page draws its rows after its
@@ -775,13 +1229,16 @@ def _wait_after_the_press(page, got: dict, heard: list, before: int) -> list:
     return drawn
 
 
-def learn(page, wait_ms: int = 25000, form: bool = True) -> Call:
+def learn(page, wait_ms: int = 25000, form: bool = True, press_link: bool = True) -> Call:
     """Reload the statements page and keep the list call it makes, and the
     form of its PDF links, opening the Statements heading first when the
-    page drew none. With `form` False, for a run that only lists (Login,
-    Discover), the links the page drew are read once and nothing is
-    pressed. Raises NotThere, SessionExpired or NotLearned, and
-    pressing.Stop when the heading has something over it."""
+    page drew none. When every link's address is a script, one link is
+    pressed to learn the call its PDF comes by instead (learn_pdf_call),
+    unless `press_link` is False, as for Diagnose. With `form` False, for a
+    run that only lists (Login, Discover), the links the page drew are read
+    once and nothing is pressed. Raises NotThere, SessionExpired or
+    NotLearned, and pressing.Stop when the heading or the link has
+    something over it."""
     if not on_statements_page(page):
         raise NotThere("the tab is not on Statements & Documents")
     got = {}
@@ -884,6 +1341,12 @@ def learn(page, wait_ms: int = 25000, form: bool = True) -> Call:
                 link_host=hosts.pop() if len(hosts) == 1 else "", facts=facts)
     if call.template is not None and not call.link_host:
         call.template = None
+    if form and call.template is None and _all_by_script(facts):
+        if press_link:
+            call.pdf, pressed_facts = learn_pdf_call(page, drawn, rows, call)
+            call.facts.update(pressed_facts)
+        else:
+            call.facts["pdf_link"] = "not pressed"
     # Asked once a run that downloads needs it, unless this one found it.
     call.form_tried = form or call.template is not None
     _learned.update(at=time.monotonic(), call=call)
@@ -901,6 +1364,29 @@ def not_learned_why(facts: dict) -> Tuple[str, str]:
         return ("the statements page drew no Download PDF link, and its Statements "
                 "heading could not be opened (%s)" % (heading or "not pressed"),
                 "no pdf link on the page")
+    link = facts.get("pdf_link")
+    if link in ("refused", "several", "not found"):
+        return ("the statements page's Download PDF links do not show the address of "
+                "their statement, and none of them is a link this app presses (%s)" % link,
+                "the pdf link was not pressed")
+    if link == "pressed":
+        if not facts.get("pdf_urls"):
+            return ("pressing a Download PDF link brought no PDF this app could hear",
+                    "no pdf url after the link was pressed")
+        if facts["pdf_urls"] > 1:
+            return ("pressing a Download PDF link brought a PDF from more than one call",
+                    "several pdf urls after the link was pressed")
+        if facts.get("pdf_url_refused"):
+            return ("the call a Download PDF link makes for its PDF is not one this app "
+                    "asks again", "the pdf url is refused")
+        if not facts.get("statements_in_the_pdf_url"):
+            return ("the call a Download PDF link makes for its PDF names no listed "
+                    "statement", "no statement id in the pdf url")
+        if facts["statements_in_the_pdf_url"] > 1:
+            return ("the call a Download PDF link makes for its PDF names more than one "
+                    "listed statement", "several statements in the pdf url")
+        return ("the call a Download PDF link makes for its PDF did not answer with a "
+                "PDF when asked again", "no pdf when the pdf url was read again")
     if not facts.get("forms"):
         if heading == "opened" and not facts.get("list_read_after_the_heading"):
             return ("the statements page drew Download PDF links for a list this app "
@@ -929,6 +1415,7 @@ def learned(page, form: bool = False) -> Call:
 
 def forget() -> None:
     _learned.update(at=0.0, call=None)
+    _pdf_learned.update(pdf=None, pressed=False, facts=None)
 
 
 # ---------------------------------------------------------------------------
@@ -971,6 +1458,55 @@ _PDF_JS = r"""async (url) => {
   return {status: r.status, url: r.url, ct: r.headers.get('content-type') || '',
           cd: r.headers.get('content-disposition') || '', b64: btoa(bin)};
 }"""
+
+
+# A statement's PDF asked with the call a Download PDF link's press made,
+# its method, the headers it sent and its body as it sent it.
+_PDF_CALL_JS = r"""async ([url, method, headers, body]) => {
+  const ours = u => u.protocol === 'https:' &&
+    (u.hostname === 'bankofamerica.com' || u.hostname.endsWith('.bankofamerica.com'));
+  const t = new URL(url, location.href);
+  if (!ours(t) || (method !== 'GET' && method !== 'POST')) {
+    throw new Error('Refusing an off-host request');
+  }
+  const init = {method: method, credentials: 'include', redirect: 'follow',
+                headers: Object.assign({}, headers || {})};
+  if (method === 'POST') { init.body = body; }
+  const r = await fetch(t.href, init);
+  const end = new URL(r.url || t.href);
+  if (!ours(end)) {
+    // Followed off the site. Its body is never read.
+    return {status: r.status, url: r.url, ct: '', cd: '', b64: ''};
+  }
+  const bytes = await ppRead(r);
+  let bin = ''; const CH = 0x8000;
+  for (let i = 0; i < bytes.length; i += CH) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+  }
+  return {status: r.status, url: r.url, ct: r.headers.get('content-type') || '',
+          cd: r.headers.get('content-disposition') || '', b64: btoa(bin)};
+}"""
+
+
+def _ask_pdf(page, pdf: PdfCall, row: dict) -> Optional[dict]:
+    """A row's PDF asked from inside the page with the learned call, as
+    {status, url, ct, cd, b64}. Raises NotLearned when the row's own call
+    would not come out on the host the press's call went to, ListCut when
+    the page could not ask, and SessionExpired on a sign-in answer."""
+    filled = pdf.filled(row)
+    if filled is None:
+        raise NotLearned("a statement's address did not come out where the page's own call is")
+    url, body = filled
+    if not is_safe_url(url) or (urlsplit(url).hostname or "").lower() != pdf.host:
+        raise NotLearned("a statement's address did not come out where the page's own call is")
+    try:
+        r = intake.evaluate(page, _PDF_CALL_JS, [url, pdf.method, pdf.headers, body])
+    except Exception as e:
+        raise ListCut("a statement could not be asked for in the page (%s)" % type(e).__name__)
+    status = r.get("status") if isinstance(r, dict) else None
+    if status in (401, 403) or not is_safe_url((r or {}).get("url") or ""):
+        raise SessionExpired("Bank of America answered %s" % status)
+    return r
 
 
 def _post_list(page, call: Call, body: dict) -> dict:
@@ -1112,7 +1648,7 @@ def document_bytes(page, *, account_ref: str, date: str, document_id: str,
     gave it ("" when it gave none). (None, "") when its row is no longer
     listed. Raises NotThere, SessionExpired or NotLearned."""
     call = learned(page, form=True)
-    if call.template is None:
+    if call.template is None and call.pdf is None:
         why, reason = not_learned_why(call.facts)
         raise NotLearned(why, call.facts, reason)
     if not (account_ref and document_id and date):
@@ -1120,6 +1656,11 @@ def document_bytes(page, *, account_ref: str, date: str, document_id: str,
     row = fresh_row(page, call, account_ref, year or date[:4], document_id)
     if row is None or row_date(row) != date:
         return None, ""
+    if call.template is None:
+        r = _ask_pdf(page, call.pdf, row)
+        if r.get("status") != 200 or not r.get("b64"):
+            return b"", ""
+        return intake.decode(r["b64"]), date_in_file_name(r.get("cd") or "")
     url = fill(call.template, row)
     if not url or not is_safe_url(url) or (urlsplit(url).hostname or "").lower() != call.link_host:
         raise NotLearned("a statement's address did not come out where the page's own links are")
@@ -1208,7 +1749,8 @@ def learned_summary(call: Call) -> dict:
             "rows_on_the_page": len(rows), "row_fields": fields,
             "body_names": sorted(call.body), "headers_kept": len(call.headers),
             "pdf_form_learned": call.template is not None,
-            "pdf_form_fields": form_fields, **call.facts}
+            "pdf_form_fields": form_fields, "pdf_url_kept": call.pdf is not None,
+            **call.facts}
 
 
 def survey(page, dwell_ms: int = 2000) -> dict:
@@ -1224,7 +1766,7 @@ def survey(page, dwell_ms: int = 2000) -> dict:
     report["pages"].append(_page_summary(page))
     if on_statements_page(page):
         try:
-            report["list"] = learned_summary(learn(page))
+            report["list"] = learned_summary(learn(page, press_link=False))
         except (NotThere, NotLearned, SessionExpired) as e:
             # Which way it stopped, by the name of the stop, and what the
             # page drew, as counts.

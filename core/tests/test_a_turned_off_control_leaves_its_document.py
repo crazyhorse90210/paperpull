@@ -77,6 +77,9 @@ STOPS = {
     ("bofa", "open_statements", "click", "expand the statements heading"): (1,
         "opens the Statements heading every statement's Download PDF link is drawn "
         "under, so a turned off heading would leave every statement"),
+    ("bofa", "_press_and_hear", "click", "download a statement"): (1,
+        "presses one statement's Download PDF link, once a run, to learn the call every "
+        "statement's PDF is asked with, so a turned off link would leave every statement"),
     ("chasebusiness", "_press", "click", ""): (1,
         "one press site serves the four controls that reach a list, an account in the "
         "menu, Statements, the year picker and a year in it, so a turned off one "

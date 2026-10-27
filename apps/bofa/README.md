@@ -9,8 +9,11 @@ delete-safe, and part of [PaperPull](../../README.md).
 to a checking statement and one to a credit card statement. Its first run
 on an account, on 2026-10-26, listed every statement and saved none, since
 the page drew no Download PDF link until its Statements heading was opened,
-which the app now does. If you bank with Bank of America, a Pilot run tells
-whether it works, see below. Tax forms are not covered yet.
+which the app now does. Its second, on 2026-10-27, met Download PDF links
+that open their PDF by a script of the page's own, with no address to
+read, so the app now presses one such link to learn how the page asks for
+a PDF. If you bank with Bank of America, a Pilot run tells whether it
+works, see below. Tax forms are not covered yet.
 
 ## How it reads the site
 
@@ -21,9 +24,13 @@ call the page makes, and asks every account's statements the same way from
 inside the page, year by year, at a person's pace, and reloads the page
 again only when what it heard is five minutes old, in a long run. A reload
 leaves the Statements heading shut, with no link drawn under it, so before
-it downloads, the app opens that heading, the one press it makes. It learns
-the form of the page's own Download PDF links and asks for each statement
-at its own address in that form.
+it downloads, the app opens that heading. It learns the form of the page's
+own Download PDF links and asks for each statement at its own address in
+that form. When the links have no address, since the page opens each PDF
+by a script of its own, the app presses one of them, once a run, and
+learns the call the page makes for that PDF instead. It keeps nothing the
+press brought, asks that call once more for the same statement to be sure
+it answers with a PDF, and then asks each statement with its own call.
 
 A statement is filed only when its text names its own day and account
 better than any statement it could be taken for, the other accounts'
@@ -74,11 +81,17 @@ to close the others.
 
 ## Safety
 
-Bank of America moves money, through transfers, Zelle and bill pay. The
-one control this app presses is the Statements heading of Statements &
-Documents, when the page shows it shut and a statement is to be downloaded,
-and only a button whose whole name is Statements, with nothing drawn over
-it. Login and Discover press nothing. It reloads Statements &
+Bank of America moves money, through transfers, Zelle and bill pay. This
+app presses two controls of Statements & Documents, each only with nothing
+drawn over it and only when a statement is to be downloaded. One is the
+Statements heading, when the page shows it shut, and only a button whose
+whole name is Statements. The other is one statement's Download PDF link,
+once a run, when no link shows an address. It has to be a link, not a
+button, whose words beside the bank's own names for your statements and
+accounts start with Download PDF for and hold nothing the app's blocklists
+refuse, read again right before the press. A
+download that press starts is cancelled and a tab it opens is closed.
+Login and Discover press nothing, and Diagnose never presses a link. It reloads Statements &
 Documents to hear its list, at the start and every five minutes of a long
 run, and asks for lists and PDFs from inside the signed-in page the way the
 page itself does, every address on `bankofamerica.com`. Login opens the home page in a tab of its own only

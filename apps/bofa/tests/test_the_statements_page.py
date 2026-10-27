@@ -301,15 +301,17 @@ def test_links_from_two_forms_are_not_taken():
 
 
 def test_a_page_that_draws_no_link_it_can_read_learns_no_form():
+    """A link whose address is a script, whose press asks for nothing."""
     page = sb.Bank()
     page.links = [{"name": "Download PDF for January Statement for Everyday Checking",
                    "href": "javascript:void(0)"}]
+    page.press_calls = lambda row: []
     call = site.learn(page)
-    assert call.template is None
+    assert call.template is None and call.pdf is None
     with pytest.raises(site.NotLearned):
         site.document_bytes(page, account_ref="K-ALPHA-0001", date="2026-01-15",
                             document_id="DOC000000000101", year="2026")
-    assert not page.pdfs
+    assert not page.pdfs and not page.pdf_calls
 
 
 def test_a_link_off_the_site_is_never_read():
@@ -401,23 +403,28 @@ def test_the_heading_guard_takes_the_whole_name_only():
 def test_links_that_hide_their_address_are_counted_and_not_guessed():
     """A link whose address is a script and whose statement's id sits only
     in a data- field, the shape a page has when a script of its own opens
-    the PDF. The stop says so in counts, and nothing is asked for."""
+    the PDF. One is pressed, and when the press asks for nothing the stop
+    says so in counts, and nothing is asked for."""
     page = sb.Bank()
     page.links = [{"name": "Download PDF for January Statement for Everyday Checking",
                    "href": "javascript:void(0)", "raw": "javascript:void(0)",
                    "data": ["x", "DOC000000000101"]},
                   {"name": "Download PDF for February Statement for Everyday Checking",
                    "href": sb.PAGE_URL + "#", "raw": "#", "data": ["DOC000000000102"]}]
+    page.press_calls = lambda row: []
     call = site.learn(page)
-    assert call.template is None and not pressed(page)
+    assert call.template is None and call.pdf is None
+    assert pressed(page) == [("click", "a statement's Download PDF link")]
     with pytest.raises(site.NotLearned) as stopped:
         site.document_bytes(page, account_ref="K-ALPHA-0001", date="2026-01-15",
                             document_id="DOC000000000101", year="2026")
-    assert "do not show the address of their statement" in str(stopped.value)
+    assert "brought no PDF this app could hear" in str(stopped.value)
+    assert stopped.value.reason == "no pdf url after the link was pressed"
     facts = stopped.value.facts
     assert (facts["pdf_links"], facts["links_to_no_page"], facts["links_to_this_page"],
             facts["links_with_an_id"], facts["links_with_an_id_elsewhere"]) == (2, 1, 1, 0, 2)
-    assert not page.pdfs
+    assert (facts["pdf_link"], facts["pdf_urls"], facts["urls_read_after_the_link_was_pressed"]) == ("pressed", 0, 0)
+    assert not page.pdfs and not page.pdf_calls
     said = repr(facts)
     for value in ("DOC000000000101", "javascript", "K-ALPHA-0001", "Everyday Checking"):
         assert value not in said, value

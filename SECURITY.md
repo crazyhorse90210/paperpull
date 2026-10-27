@@ -62,8 +62,12 @@ The `.gitignore` already blocks all of the following. Do not override it.
     presses only the Statements heading of its statements page, a button
     whose whole name is Statements and which says it is shut, when the page
     shows no Download PDF link, and again after a later reload shuts it,
-    never one a press would submit a form with, and asks for every list and
-    PDF from inside the page. M&T presses only
+    never one a press would submit a form with, and one statement's
+    Download PDF link once a run, when every link's address is a script, a
+    link and not a button whose words beside the bank's own names for the
+    statements and accounts it listed pass both patterns. It keeps nothing
+    that press brought, cancels the download and closes the tab it opened,
+    and asks for every list and PDF from inside the page. M&T presses only
     the year headings of its statements list, and since a year is no
     document word, `is_safe_control()` would refuse them. So the heading
     has a guard of its own, the blocklists plus its whole words, a year
