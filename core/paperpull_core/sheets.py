@@ -81,7 +81,7 @@ A piece after a ; or a line break that is a plain negative number is
 quoted all the same. Where the list separator is ; the decimal sign is a
 comma, and the last piece of a value the csv module leaves unquoted runs
 on through the comma that ends it into the next value, so -1 beside 5+1
-is read as -1,5+1, a working formula there. That was found by modelling
+is read as -1,5+1, a working formula there. That was found by modeling
 such a reader, not measured, and no real value had such a piece.
 
 WHAT AN XLSX CELL CANNOT HOLD (measured 2026-10-16, openpyxl 3.1.5 and the

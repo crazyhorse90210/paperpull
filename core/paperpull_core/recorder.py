@@ -1189,7 +1189,7 @@ _A_YEAR = re.compile(r"^(19|20)\d\d$")
 # every one of them is a number or a fixed sentence.
 _OURS = ("kind", "note", "provider", "recorded_at", "dropped")
 
-# Two or three capitalised words in a row, which is what a person's name
+# Two or three capitalized words in a row, which is what a person's name
 # looks like when it is sitting on a profile button. Most hits are the
 # name of a control, so this is a prompt to look rather than a finding.
 _NAME_SHAPED = re.compile(r"\b[A-Z][a-z]{1,14} [A-Z][a-z]{1,14}(?: [A-Z][a-z]{1,14})?\b")

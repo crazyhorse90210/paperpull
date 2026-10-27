@@ -10,20 +10,24 @@ All notable changes to PaperPull are recorded here. Versioning follows
 ## [Unreleased]
 
 ### Fixed
-- **A failure file calls a provider's answer empty only when it is.** Its
-  summary said an answer came back "with an empty list in it, which is an
-  account with nothing in it or a filter that excluded everything" when
-  any one list anywhere in the answer was empty. A list answer often
-  carries an errors list with no errors in it beside the rows it found,
-  and each row a list of its own with nothing in it, so Bank of America's
-  statement list, holding ten statements, was called empty and sent a
-  reader the wrong way. A row's own lists and an empty errors list no
-  longer count. The answer is called empty only when it holds a list,
-  none of its lists holds anything and no part of it was cut short. When
-  some of its lists are empty and others hold items, as an answer naming
-  the accounts and years it offers beside no statements does, the summary
-  names which were which and what an empty one would mean, rather than
-  guess which of them is the rows.
+- **A failure file no longer calls a provider's answer empty when it is
+  not.** Its summary said an answer came back "with an empty list in it,
+  which is an account with nothing in it or a filter that excluded
+  everything" when any one list anywhere in the answer was empty. A list
+  answer often carries an errors list with no errors in it beside the
+  rows it found, and each row a list of its own with nothing in it, so
+  Bank of America's statement list, holding ten statements, was called
+  empty and sent a reader the wrong way. A row's own lists and an empty
+  errors list no longer count. The summary now names the empty lists and
+  says whether others held items, and what an empty one would mean is
+  said only of the list the app reads, which the file cannot know.
+- **Reading a failure file back never loses its whole summary to one bad
+  field.** A file edited by hand or cut short by the disk could hold a
+  field of the wrong type, a request's status as text or a journal
+  entry's count as a list, and the summary raised on it, so the app
+  printed none of its sentences. Each part of the summary now reads its
+  own fields, and a part that cannot read them says nothing while the
+  rest still speak.
 
 ## [0.59.0] - 2026-10-26
 

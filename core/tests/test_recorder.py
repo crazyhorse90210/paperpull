@@ -196,7 +196,7 @@ def test_a_field_is_never_named_by_what_is_already_in_it():
     innerText reads them, and a form with the account holder's address
     pre-filled would have named the field after the address. Checked
     against the real script in a JS runtime before this was written, which
-    is why the assertion is on the guard rather than on a behaviour the
+    is why the assertion is on the guard rather than on a behavior the
     FakePage cannot produce."""
     body = _CAPTURE_JS[_CAPTURE_JS.index("const nameOf"):
                        _CAPTURE_JS.index("const locate")]
@@ -513,7 +513,7 @@ def test_a_console_that_turns_out_not_to_be_one_falls_back(tmp_path, monkeypatch
 def test_a_malformed_payload_from_the_page_never_raises(payload):
     r, page = rec()
     page.fire(payload)
-    assert json.dumps(r.report()), "the report must stay serialisable"
+    assert json.dumps(r.report()), "the report must stay serializable"
 
 
 def test_a_page_cannot_grow_the_file_without_limit():

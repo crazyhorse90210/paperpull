@@ -250,60 +250,69 @@ class Requests:
 
 
 def summarize(report: dict) -> list:
-    """What a reader should notice, in sentences."""
+    """What a reader should notice, in sentences.
+
+    It reads a failure file back, which a person may have edited or a
+    disk cut short, so a field of the wrong type is read as missing and
+    never raises. A raise here would take every other sentence of the
+    file's summary with it."""
     said = []
     if not isinstance(report, dict):
         return said
-    seen = [e for e in (report.get("seen") or []) if isinstance(e, dict)]
+    seen = report.get("seen")
+    seen = [e for e in seen if isinstance(e, dict)] if isinstance(seen, list) else []
     counts = report.get("counts")
     if not isinstance(counts, dict):
         # Nobody watched, which is not the same as having watched and
         # seen nothing, and only one of those is worth a sentence.
         return said
 
-    if not counts.get("provider"):
-        if counts.get("elsewhere"):
+    if not _count(counts.get("provider")):
+        elsewhere = _count(counts.get("elsewhere"))
+        if elsewhere:
             said.append("The page made %d request(s) and not one of them went "
                         "to the provider, so either the app never asked or it "
-                        "asked somewhere this app does not recognise as the "
-                        "provider's own." % _count(counts["elsewhere"]))
+                        "asked somewhere this app does not recognize as the "
+                        "provider's own." % elsewhere)
         else:
             said.append("The page made no requests at all while this ran.")
         return said
 
-    bad = [e for e in seen if 400 <= (e.get("status") or 0) < 600]
+    bad = [e for e in seen if 400 <= _status(e) < 600]
     for e in bad[:4]:
-        said.append("%s %s answered %d." % (e.get("method", "").upper(),
-                                            e.get("path"), e["status"]))
-        if e["status"] in (401, 403):
+        status = _status(e)
+        said.append("%s %s answered %d." % (str(e.get("method") or "").upper(),
+                                            e.get("path"), status))
+        if status in (401, 403):
             said[-1] += " The session is probably over, or that call needs a header the app is not sending."
-        elif e["status"] == 404:
+        elif status == 404:
             said[-1] += " The address has moved, or the thing asked for is not there."
-        elif e["status"] == 429:
+        elif status == 429:
             said[-1] += " Too many requests, so slow the run down."
 
+    # Which list is the rows is the app's to know, not this file's. A
+    # messages list with nothing in it is no more an empty account than
+    # an errors list is, so each sentence names the lists and says what
+    # an empty one would mean, and claims no more.
+    meaning = (" When an empty one is the list this app reads, that is an "
+               "account with nothing in it or a filter that excluded "
+               "everything, and those are different problems.")
     told = 0
     for e in seen:
         if told >= 3:
             break
-        if e.get("kind") != "json" or e.get("status") != 200:
+        if e.get("kind") != "json" or _status(e) != 200:
             continue
         empty, holding, whole = _lists_of(e.get("shape"))
         if empty and not holding and whole:
-            said.append("%s answered 200 and every list in it was empty, "
-                        "which is an account with nothing in it or a filter "
-                        "that excluded everything, and those are different "
-                        "problems." % e.get("path"))
+            said.append("%s answered 200 with %s empty and no list in it "
+                        "holding anything." % (e.get("path"), _names(empty))
+                        + meaning)
             told += 1
         elif empty and holding:
-            # Which list is the rows is the app's to know, not this
-            # file's, so this says what each list held and no more.
             said.append("%s answered 200 with %s empty beside %s holding "
-                        "items. When an empty one is the list this app "
-                        "reads, that is an account with nothing in it or a "
-                        "filter that excluded everything, and those are "
-                        "different problems."
-                        % (e.get("path"), _names(empty), _names(holding)))
+                        "items." % (e.get("path"), _names(empty),
+                                    _names(holding)) + meaning)
             told += 1
 
     if not any(e.get("kind") == "json" for e in seen):
@@ -317,6 +326,12 @@ _COUNT = re.compile(r"([0-9]{1,9}) item\(s\)")
 # Deeper than any shape of ours, which stops at MAX_DEPTH, so only a file
 # made by hand reaches it, and it reads as a part cut short.
 _MAX_WALK = 64
+
+
+def _status(entry: dict) -> int:
+    """An entry's status, 0 when it is not a whole number. True is not 1."""
+    status = entry.get("status")
+    return status if type(status) is int else 0
 
 
 def _looks_empty(shape) -> bool:

@@ -288,7 +288,7 @@ canary runs over the journal too.
 
 Eleven of the forty eight declare no selectors, because they read a JSON
 API rather than a page. The selector census had nothing to say about
-them, so a quarter of the catalogue got a page state and little else.
+them, so a quarter of the catalog got a page state and little else.
 
 `core/paperpull_core/api_census.py` is their half. It listens rather
 than asking, on Playwright's response event, so it works whatever way an
@@ -314,22 +314,26 @@ name of its type.
     {"88213344": {"balance": 99.99}} ->  {"#": {"balance": "number"}}
 
 The sentence it exists to write is the one that costs a round every
-time. **An answer at status 200 whose every list is empty is an empty
-account or a filter that excluded everything, and those are different
-problems.** It says which it cannot tell, rather than leaving a
+time. **An empty list at status 200, when it is the list the app reads,
+is an empty account or a filter that excluded everything, and those are
+different problems.** It says which it cannot tell, rather than leaving a
 maintainer to guess.
 
-One empty list says neither on its own. A row's own lists (a statement's
-list of inserts) are not counted, since the row was found, and an errors
-or warnings list with nothing in it is left out, since it says only that
-nothing went wrong. An answer whose errors list holds something is about
-that error, and no sentence about empty lists is written for it. With
-what is left, the answer is called empty only when it holds at least one
-list, none of them holds anything and no part of its shape was cut short.
-When some lists are empty and others hold items, as an answer listing the
-accounts and years it offers beside no statements does, the sentence
-names which were which and what an empty one would mean, since which list
-is the rows is the app's to know.
+Which list is the rows is the app's to know, not the file's. So the
+sentence names the empty lists, says whether any other list held items,
+and gives what an empty one would mean as a condition, never as a
+finding. A list that cannot be the rows is left out. A row's own lists (a
+statement's list of inserts) are not counted, since the row was found,
+and an errors or warnings list with nothing in it says only that nothing
+went wrong. An answer whose errors list holds something is about that
+error, and no sentence about empty lists is written for it. An answer
+with no list holding anything is said to be one only when no part of its
+shape was cut short, since the part left out could hold the rows.
+
+A failure file is read back by the app that wrote it, and a person may
+have edited it or a disk cut it short, so any field can hold any type.
+Each part of the summary reads its own fields in a guard of its own, and
+a part that cannot read them says nothing while the others still speak.
 
 ## Guessing the wait, and finding out which guess was right
 
@@ -413,7 +417,7 @@ marked.
 - A provider that only breaks on an account with something unusual on
   it, a second membership, a joint account, a closed card
 - Anything behind a challenge the tester has to answer by hand
-- Judgement about whether a saved PDF is the *right* document, which
+- Judgment about whether a saved PDF is the *right* document, which
   needs a person to look at it
 
 ## Where it lives

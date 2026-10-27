@@ -246,18 +246,23 @@ def test_a_404_and_a_429_say_different_things():
     assert "slow the run down" in b
 
 
-EMPTY = "every list in it was empty"
-PARTLY = "When an empty one is the list this app reads"
+EMPTY = "no list in it holding anything"
+MEANING = "When an empty one is the list this app reads"
+CLAIM = "account with nothing in it"
 
 
-def said_of(body) -> str:
+def sentences_of(body) -> list:
     """What is said of one answer, read the way a reader reads it, from
     the failure file as written and loaded again."""
     from paperpull_core.words import shape_tree, words_for
     r = seen(FakeResponse("https://api.bank.example/v1/docs", body=body))
     report = json.loads(json.dumps(shape_tree(
         {"requests": r.report()}, words_for("bank"), full_list=True)))
-    return " ".join(A.summarize(report["requests"]))
+    return A.summarize(report["requests"])
+
+
+def said_of(body) -> str:
+    return " ".join(sentences_of(body))
 
 
 def called_empty(body) -> bool:
@@ -316,7 +321,7 @@ def test_an_empty_list_beside_lists_holding_items_is_named_as_it_is():
                     "documentCategoryList": [{"name": "string"}] * 4,
                     "yearList": ["string"] * 8,
                     "errorInfo": [], "status": "string"})
-    assert PARTLY in said
+    assert MEANING in said
     assert EMPTY not in said
     assert "with documentList empty beside" in said
     assert "accountList, documentCategoryList and yearList holding" in said
@@ -336,7 +341,7 @@ def test_an_answer_carrying_an_error_says_nothing_about_empty_lists():
     body = {"documents": [], "accounts": [{"id": "a"}],
             "errors": [{"code": "string"}]}
     said = said_of(body)
-    assert EMPTY not in said and PARTLY not in said
+    assert EMPTY not in said and MEANING not in said
 
 
 def test_an_answer_with_no_list_at_all_is_not_called_empty():
@@ -360,6 +365,29 @@ def test_an_answer_cut_short_is_never_called_empty():
     assert said_of(wide) == ""
 
 
+def test_an_answer_whose_only_list_is_incidental_is_named_and_not_judged():
+    """A messages list with nothing in it, in an answer whose content is
+    not a list at all, is not an empty account. The file cannot tell it
+    from one that is, so the sentence names the list and leaves what an
+    empty one means to the reader, who knows which list the app reads."""
+    said = said_of({"status": "string", "messages": []})
+    assert "with messages empty and " + EMPTY in said
+    assert said.index(CLAIM) > said.index(MEANING)
+
+
+def test_no_sentence_claims_an_empty_account_outright():
+    """Every sentence that speaks of an empty account says first that it
+    means the list the app reads, whatever the lists are named."""
+    bodies = ({"documents": []}, [], {"status": "string", "messages": []},
+              {"data": {"accounts": [], "documents": []}},
+              {"documentList": [], "accountList": [{"name": "string"}]})
+    for body in bodies:
+        claims = [s for s in sentences_of(body) if CLAIM in s]
+        assert claims, body
+        for s in claims:
+            assert MEANING in s and s.index(CLAIM) > s.index(MEANING), s
+
+
 def test_a_file_made_by_hand_never_makes_the_summary_raise():
     """A count that is digits to str.isdigit and not to int, a count past
     the length int will read, and objects nested past any recursion
@@ -375,6 +403,48 @@ def test_a_file_made_by_hand_never_makes_the_summary_raise():
                             "shape": shape}]}
         assert EMPTY not in " ".join(A.summarize(report))
         assert not A._looks_empty(shape)
+
+
+WRONG = (None, "x", "404", 404.5, True, -1, 10 ** 30, "9" * 5000, [], {},
+         [1, "a"], {"a": [1]}, "0 item(s)", ["0 item(s)"],
+         [["0 item(s)", None]])
+
+
+def test_a_field_of_the_wrong_type_never_makes_the_summary_raise():
+    """Every field of a report in turn, holding each wrong type a JSON
+    file can carry. A string status once raised here, and a raise takes
+    every other sentence of the file's summary with it."""
+    def report(provider):
+        return {"counts": {"provider": provider, "elsewhere": 2},
+                "seen": [{"kind": "json", "status": 200, "path": "/x",
+                          "method": "post",
+                          "shape": {"documents": ["0 item(s)", None]}},
+                         {"kind": "json", "status": 404, "path": "/y",
+                          "method": "get"}]}
+
+    # Both reports say something, so a field broken below is one that
+    # was read.
+    assert "answered 404" in " ".join(A.summarize(report(3)))
+    assert EMPTY in " ".join(A.summarize(report(3)))
+    assert "not one of them went" in " ".join(A.summarize(report(0)))
+    places = [(), ("counts",), ("seen",), ("counts", "provider"),
+              ("counts", "elsewhere"), ("seen", 0), ("seen", 1)]
+    places += [("seen", i, k) for i in (0, 1)
+               for k in ("kind", "status", "path", "method", "shape")]
+    for provider in (3, 0):
+        for where in places:
+            for wrong in WRONG:
+                r = report(provider)
+                if not where:
+                    r = wrong
+                else:
+                    holder = r
+                    for step in where[:-1]:
+                        holder = holder[step]
+                    holder[where[-1]] = wrong
+                said = A.summarize(r)
+                assert isinstance(said, list), (where, wrong)
+                assert all(isinstance(s, str) for s in said), (where, wrong)
 
 
 def test_no_provider_call_at_all_is_the_first_thing_said():

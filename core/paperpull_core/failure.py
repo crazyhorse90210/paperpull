@@ -743,10 +743,37 @@ def _only_safe(value, depth: int = 0):
 
 
 def summarize(report: dict) -> list:
-    """What a reader should notice first, in sentences."""
+    """What a reader should notice first, in sentences.
+
+    It reads a failure file back, which a person may have edited or a disk
+    cut short, so any field can hold any type. Each part reads its own
+    fields in a guard of its own, and a part that cannot read them says
+    nothing rather than taking every other part's sentences with it."""
     said = []
     if not isinstance(report, dict):
         return said
+    from .api_census import summarize as _requests_said
+    from .identity import summarize as _identity_said
+    from .journal import summarize as _journal_said
+    parts = (
+        _selectors_said,
+        _page_said,
+        _kept_said,
+        lambda r: _identity_said(r.get("identity") or {}),
+        lambda r: _requests_said(r.get("requests") or {}),
+        lambda r: _journal_said(r.get("journal") or {}),
+        _parser_said,
+    )
+    for part in parts:
+        try:
+            said.extend(s for s in part(report) if isinstance(s, str))
+        except Exception:
+            pass
+    return said[:20]
+
+
+def _selectors_said(report: dict) -> list:
+    said = []
     entries = [e for e in (report.get("selectors") or []) if isinstance(e, dict)]
     page = report.get("page") or {}
 
@@ -802,7 +829,12 @@ def summarize(report: dict) -> list:
         elif e.get("matched") == 0:
             said.append("%s matched nothing. Either the page had not drawn "
                         "yet or the selector is wrong." % e.get("name"))
+    return said
 
+
+def _page_said(report: dict) -> list:
+    said = []
+    page = report.get("page") or {}
     counts = page.get("counts") or {}
     if counts.get("passwords"):
         said.append("There is a password field on the page, so the session "
@@ -815,29 +847,27 @@ def summarize(report: dict) -> list:
         said.append("Scrolling is locked on the page, which is what an open "
                     "dialog does, and what makes a rendered document come "
                     "out as one blank screen.")
+    return said
 
+
+def _kept_said(report: dict) -> list:
     extra = report.get("extra") or {}
     kept = (extra.get("postmortem") or {}).get("kept") or {}
     if kept.get("box") == [0, 0]:
-        said.append("The block it kept measured nought by nought, so it "
-                    "rendered nothing.")
-    from .identity import summarize as _identity_said
-    said.extend(_identity_said(report.get("identity") or {}))
+        return ["The block it kept measured nought by nought, so it "
+                "rendered nothing."]
+    return []
 
-    from .api_census import summarize as _requests_said
-    said.extend(_requests_said(report.get("requests") or {}))
 
-    from .journal import summarize as _journal_said
-    said.extend(_journal_said(report.get("journal") or {}))
-
-    parser = extra.get("parser") or {}
+def _parser_said(report: dict) -> list:
+    parser = (report.get("extra") or {}).get("parser") or {}
     if parser.get("candidates") and not parser.get("accepted"):
         why = parser.get("rejected") or {}
         top = max(why, key=why.get) if why else ""
-        said.append("%d line(s) looked like items and none were accepted%s."
-                    % (parser["candidates"],
-                       ", all of them for %s" % top.replace("_", " ") if top else ""))
-    return said[:20]
+        return ["%d line(s) looked like items and none were accepted%s."
+                % (parser["candidates"],
+                   ", all of them for %s" % top.replace("_", " ") if top else "")]
+    return []
 
 
 SURVEY_NOTE = (

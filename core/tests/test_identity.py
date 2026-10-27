@@ -356,7 +356,7 @@ def test_a_shared_date_stops_counting_as_evidence():
     assert "date" not in v.checked
 
 
-# -- the Fairfax shape, where the document prints the neighbour's date --------
+# -- the Fairfax shape, where the document prints the neighbor's date --------
 
 FAIRFAX_JULY = ("Fairfax Water  Account 0684\n"
                 "Bill date 07/14/26   Due 08/14/26\n"
