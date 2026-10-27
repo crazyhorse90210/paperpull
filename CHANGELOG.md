@@ -7,6 +7,24 @@ All notable changes to PaperPull are recorded here. Versioning follows
 - **MINOR**, a new app, or a cross-app feature
 - **MAJOR**, breaking changes (repo layout, config format, removing an app)
 
+## [Unreleased]
+
+### Fixed
+- **A failure file calls a provider's answer empty only when it is.** Its
+  summary said an answer came back "with an empty list in it, which is an
+  account with nothing in it or a filter that excluded everything" when
+  any one list anywhere in the answer was empty. A list answer often
+  carries an errors list with no errors in it beside the rows it found,
+  and each row a list of its own with nothing in it, so Bank of America's
+  statement list, holding ten statements, was called empty and sent a
+  reader the wrong way. A row's own lists and an empty errors list no
+  longer count. The answer is called empty only when it holds a list,
+  none of its lists holds anything and no part of it was cut short. When
+  some of its lists are empty and others hold items, as an answer naming
+  the accounts and years it offers beside no statements does, the summary
+  names which were which and what an empty one would mean, rather than
+  guess which of them is the rows.
+
 ## [0.59.0] - 2026-10-26
 
 Bank of America downloads checking, savings and credit card statements,

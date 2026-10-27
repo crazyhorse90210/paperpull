@@ -45,6 +45,8 @@ bank's page is still a record of what somebody was doing.
 """
 from __future__ import annotations
 
+import re
+
 from .characters import whole_json
 from .failure import _count, _enum
 from .words import Fixed, shape
@@ -280,14 +282,29 @@ def summarize(report: dict) -> list:
         elif e["status"] == 429:
             said[-1] += " Too many requests, so slow the run down."
 
-    empty = [e for e in seen
-             if e.get("kind") == "json" and e.get("status") == 200
-             and _looks_empty(e.get("shape"))]
-    for e in empty[:3]:
-        said.append("%s answered 200 with an empty list in it, which is an "
-                    "account with nothing in it or a filter that excluded "
-                    "everything, and those are different problems."
-                    % e.get("path"))
+    told = 0
+    for e in seen:
+        if told >= 3:
+            break
+        if e.get("kind") != "json" or e.get("status") != 200:
+            continue
+        empty, holding, whole = _lists_of(e.get("shape"))
+        if empty and not holding and whole:
+            said.append("%s answered 200 and every list in it was empty, "
+                        "which is an account with nothing in it or a filter "
+                        "that excluded everything, and those are different "
+                        "problems." % e.get("path"))
+            told += 1
+        elif empty and holding:
+            # Which list is the rows is the app's to know, not this
+            # file's, so this says what each list held and no more.
+            said.append("%s answered 200 with %s empty beside %s holding "
+                        "items. When an empty one is the list this app "
+                        "reads, that is an account with nothing in it or a "
+                        "filter that excluded everything, and those are "
+                        "different problems."
+                        % (e.get("path"), _names(empty), _names(holding)))
+            told += 1
 
     if not any(e.get("kind") == "json" for e in seen):
         said.append("Nothing the provider sent back was JSON, so this app's "
@@ -296,12 +313,78 @@ def summarize(report: dict) -> list:
     return said[:20]
 
 
+_COUNT = re.compile(r"([0-9]{1,9}) item\(s\)")
+# Deeper than any shape of ours, which stops at MAX_DEPTH, so only a file
+# made by hand reaches it, and it reads as a part cut short.
+_MAX_WALK = 64
+
+
 def _looks_empty(shape) -> bool:
-    """A shape whose every list is empty, anywhere in it."""
-    if isinstance(shape, list) and shape:
-        if str(shape[0]).startswith("0 item"):
-            return True
-        return any(_looks_empty(s) for s in shape[1:])
-    if isinstance(shape, dict):
-        return any(_looks_empty(v) for v in shape.values())
-    return False
+    """A shape that holds at least one list, none of them with anything in
+    it, and nothing cut short."""
+    empty, holding, whole = _lists_of(shape)
+    return bool(empty) and not holding and whole
+
+
+def _lists_of(shape) -> tuple:
+    """(empty, holding, whole) for one answer. Where its lists held
+    nothing, where they held something, and whether every part of it was
+    read.
+
+    One empty list says little on its own. A list answer carries an errors
+    list with no errors in it beside the rows it found, so an errors or
+    warnings list with nothing in it is left out, and an answer whose
+    errors list holds something is about that error and says nothing here.
+    A list inside a row is that row's own, a statement's list of inserts,
+    so the rows are counted and their own lists are not. A part cut short,
+    too deep or past MAX_KEYS, or a count that cannot be read, could hold
+    the rows, so such an answer is never whole."""
+    found = []
+    _outer_lists(shape, "", 0, found)
+    empty, holding, whole = [], [], True
+    for where, size in found:
+        if size is None:
+            whole = False
+        elif _names_errors(where):
+            if size:
+                return [], [], whole
+        elif size:
+            holding.append(where)
+        else:
+            empty.append(where)
+    return empty, holding, whole
+
+
+def _outer_lists(shape, where: str, depth: int, found: list) -> None:
+    """Each list reached through objects alone, as (where, size), size None
+    for a part cut short or a count that cannot be read."""
+    if depth > _MAX_WALK or shape == "...":
+        found.append((where, None))
+    elif isinstance(shape, list):
+        head = _COUNT.fullmatch(str(shape[0]) if shape else "")
+        found.append((where or "the answer", int(head.group(1)) if head else None))
+    elif isinstance(shape, dict):
+        if "..." in shape:
+            found.append((where, None))
+        for k, v in shape.items():
+            _outer_lists(v, "%s.%s" % (where, k) if where else str(k),
+                         depth + 1, found)
+
+
+def _names_errors(where: str) -> bool:
+    """Whether the last name on a path is one for errors or warnings,
+    errorInfo, validation_errors or WARNINGS."""
+    last = where.rsplit(".", 1)[-1]
+    words = re.findall(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+", last)
+    return any(w.lower() in ("error", "errors", "warning", "warnings")
+               for w in words)
+
+
+def _names(where: list) -> str:
+    """A few of the places named, the way a sentence lists them."""
+    shown = [w[:80] for w in where[:3]]
+    if len(where) > 3:
+        shown.append("%d more" % (len(where) - 3))
+    if len(shown) == 1:
+        return shown[0]
+    return "%s and %s" % (", ".join(shown[:-1]), shown[-1])
