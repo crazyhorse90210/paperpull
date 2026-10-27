@@ -187,6 +187,47 @@ def test_pilot_on_a_page_whose_reload_shuts_the_statements_heading_files_its_sta
     assert bank.reloads == 2
 
 
+def test_pilot_on_a_page_whose_links_open_by_a_script_files_every_statement(tmp_path, bank, capsys):
+    """appchamp's second real run (#121, 2026-10-27). The one link drawn had
+    "#" for its address. One link is pressed, once, and every statement is
+    asked with its own row's call, the PDF the press brought kept nowhere."""
+    bank.links = sb.script_links(bank.listed["documentList"])
+    bank.press_downloads = lambda row: ["blob:https://secure.bankofamerica.com/0f0e-sample"]
+    assert run(tmp_path, "--pilot") == 0
+    saved = sorted(p.name for p in (tmp_path / "out").rglob("*.pdf"))
+    assert saved == ["2025-12-15 Bank of America Statement - Everyday Checking.pdf",
+                     "2026-01-15 Bank of America Statement - Everyday Checking.pdf",
+                     "2026-01-15 Bank of America Statement - Travel Card.pdf",
+                     "2026-02-15 Bank of America Statement - Everyday Checking.pdf"]
+    assert result(capsys.readouterr().out)["new_files"] == 4
+    assert [a for a in bank.asked if a[0] in sb.PRESSES] == [
+        ("click", "a statement's Download PDF link")]
+    # Once again for the statement pressed, then once for each statement.
+    asked = [json.loads(c["body"])["docId"] for c in bank.pdf_calls]
+    assert asked[0] == "DOC000000000101" and sorted(asked[1:]) == [
+        "DOC000000000091", "DOC000000000101", "DOC000000000102", "DOC000000000201"]
+    assert ("delete", "blob:https://secure.bankofamerica.com/0f0e-sample") in bank.downloads_ended
+    assert not bank.pdfs and not list((tmp_path / "out" / "Diagnostics").glob("failure-*.json"))
+
+
+def test_something_over_a_download_pdf_link_stops_the_run(tmp_path, bank, capsys, monkeypatch):
+    bank.links = sb.script_links(bank.listed["documentList"])
+
+    def covered(page, el, *, css, what, words, step="press a control", **k):
+        raise pressing.Covered(step, "something on the page is over the control",
+                               ["Something on the page covers %s, so nothing was pressed." % what,
+                                pressing.AGAIN], {"verdict": "covered"})
+    monkeypatch.setattr(pressing, "click", covered)
+    assert run(tmp_path, "--pilot") == ("exit", 0)
+    raw = capsys.readouterr().out
+    assert "covers a statement's Download PDF link, so nothing was pressed" in " ".join(raw.split())
+    (written,) = list((tmp_path / "out" / "Diagnostics").glob("failure-*.json"))
+    report = json.loads(written.read_text(encoding="utf-8"))
+    assert report["step"] == "download a statement" and report["extra"]["verdict"] == "covered"
+    assert result(raw)["stopped"] == 1
+    assert not bank.pdf_calls and not list((tmp_path / "out").rglob("*.pdf"))
+
+
 def test_discover_and_login_on_a_shut_heading_press_nothing(tmp_path, bank, capsys):
     """A list needs no PDF link. appchamp's Discover listed every statement
     with the heading shut, and still does, pressing nothing."""
@@ -207,17 +248,21 @@ def test_a_page_whose_links_hide_their_address_stops_with_its_counts(tmp_path, b
     bank.links = [{"name": "Download PDF for January Statement for Everyday Checking",
                    "href": "javascript:void(0)", "raw": "javascript:void(0)",
                    "data": ["DOC000000000101"]}]
+    # Its press asks for something that is no PDF.
+    bank.press_calls = lambda row: [dict(sb.json_call(row)[0], answer="application/json")]
     assert run(tmp_path, "--pilot", "--max-docs", "1") == ("exit", 0)
     out = " ".join(capsys.readouterr().out.split())
-    assert "do not show the address of their statement" in out and "#121" in out
+    assert "brought no PDF this app could hear" in out and "#121" in out
     (written,) = list((tmp_path / "out" / "Diagnostics").glob("failure-*.json"))
     report = json.loads(written.read_text(encoding="utf-8"))
     assert report["step"] == "download a statement"
-    assert report["reason"] == "no statement id in the pdf links"
+    assert report["reason"] == "no pdf url after the link was pressed"
     said = report["extra"]["postmortem"]
     assert said["statements_heading"] == "opened" and said["pdf_links"] == 1
     assert said["links_to_no_page"] == 1 and said["links_with_an_id_elsewhere"] == 1
     assert said["links_with_an_id"] == 0 and said["times_the_list_was_read"] == 2
+    assert (said["pdf_link"], said["urls_read_after_the_link_was_pressed"], said["pdf_files_read"],
+            said["pdf_urls"]) == ("pressed", 1, 0, 0)
     text = written.read_text(encoding="utf-8")
     for value in INVENTED + ("Everyday Checking", "Dana", "javascript"):
         assert value not in text, value

@@ -7,6 +7,26 @@ All notable changes to PaperPull are recorded here. Versioning follows
 - **MINOR**, a new app, or a cross-app feature
 - **MAJOR**, breaking changes (repo layout, config format, removing an app)
 
+## [Unreleased]
+
+### Fixed
+- **Bank of America learns how its page asks for a PDF when the Download
+  PDF links have no address (#121).** On 0.59.0 the Statements heading
+  opened as it should, and the run still saved nothing, since the page's
+  one Download PDF link had "#" for its address and opens its PDF by a
+  script of its own. The app now presses one such link, once a run, and
+  hears the call the page makes for that PDF, a GET, or a POST of JSON or
+  a form, on bankofamerica.com, naming no change, that holds exactly one
+  listed statement's id. It keeps nothing the press brought, cancels the
+  download and closes the tab the press opened, asks that call once more
+  for the same statement, and keeps it only when that answers with a PDF.
+  Each statement is then asked with its own call, from inside the page.
+  The link has to be a link, not a button, whose words beside the bank's
+  own names for the statements and accounts it listed pass the blocklists,
+  read again right before the press, with nothing drawn over it. Login,
+  Discover and Diagnose press no link, and a stop says in counts what the
+  press brought.
+
 ## [0.59.0] - 2026-10-26
 
 Bank of America downloads checking, savings and credit card statements,
