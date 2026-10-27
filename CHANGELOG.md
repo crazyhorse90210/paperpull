@@ -7,7 +7,14 @@ All notable changes to PaperPull are recorded here. Versioning follows
 - **MINOR**, a new app, or a cross-app feature
 - **MAJOR**, breaking changes (repo layout, config format, removing an app)
 
-## [Unreleased]
+## [0.59.0] - 2026-10-26
+
+Bank of America downloads checking, savings and credit card statements,
+with the stop from its first real run fixed. Navy Federal, Costco and
+PayPal check a saved document against each kind of look-alike apart, nine
+apps stop rather than call a list whole when part of it was not read, and
+Capital One and Schwab no longer download statements saved before 0.34
+again. pypdf 6.21.2 closes three advisories.
 
 ### Security
 - **The Windows and Mac packages and the server image take pypdf 6.21.2
