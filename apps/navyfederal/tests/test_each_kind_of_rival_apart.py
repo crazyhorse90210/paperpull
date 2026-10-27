@@ -33,8 +33,8 @@ from paperpull_core.journal import Journal
 
 CHECKING, CARD = "Everyday Checking", "Visa Signature Rewards"
 # Both accounts billed on each of three days, newest first as _select hands them.
-LISTED = [("2026-09-15", CHECKING), ("2026-09-15", CARD), ("2026-08-15", CHECKING),
-          ("2026-08-15", CARD), ("2026-07-15", CHECKING), ("2026-07-15", CARD)]
+LISTED = [("2026-09-23", CHECKING), ("2026-09-23", CARD), ("2026-08-23", CHECKING),
+          ("2026-08-23", CARD), ("2026-07-23", CHECKING), ("2026-07-23", CARD)]
 
 
 class _Store:
@@ -113,8 +113,8 @@ def test_another_month_of_the_same_account_is_refused_on_a_shared_day(tmp_path, 
     account, and the card's statement of August shares August's day, so one
     pool counted neither and filed it unchecked."""
     app, filed = _run(tmp_path, monkeypatch,
-                      brings={("2026-08-15", CHECKING): ("2026-07-15", CHECKING)})
-    assert not any(n.startswith("2026-08-15") and "Checking" in n for n in filed), filed
+                      brings={("2026-08-23", CHECKING): ("2026-07-23", CHECKING)})
+    assert not any(n.startswith("2026-08-23") and "Checking" in n for n in filed), filed
     assert len(filed) == 5
     assert app.stats["wrong_document"] == 1
 
@@ -124,24 +124,24 @@ def test_another_accounts_statement_of_the_same_day_is_refused(tmp_path, monkeyp
     day is August's, and the card's statements of the other months shared
     its account, so one pool counted neither."""
     app, filed = _run(tmp_path, monkeypatch,
-                      brings={("2026-08-15", CHECKING): ("2026-08-15", CARD)})
+                      brings={("2026-08-23", CHECKING): ("2026-08-23", CARD)})
     assert len(filed) == 5 and app.stats["wrong_document"] == 1, filed
 
 
-@pytest.mark.parametrize("came", [("2026-07-15", CHECKING), ("2026-08-15", CARD)],
+@pytest.mark.parametrize("came", [("2026-07-23", CHECKING), ("2026-08-23", CARD)],
                          ids=["another month", "another account"])
 def test_with_refuse_wrong_documents_off_nothing_is_destroyed(tmp_path, monkeypatch, came):
     """Off, the app keeps what it was handed, as it keeps one the capture
     itself refuses."""
     app, filed = _run(tmp_path, monkeypatch, strict=False,
-                      brings={("2026-08-15", CHECKING): came})
+                      brings={("2026-08-23", CHECKING): came})
     assert len(filed) == 6 and not app.stats["wrong_document"], filed
 
 
-# The closing day written 08-15-26, a form the check does not know, and the
-# period before it as 07-16-26, so neither its day nor another's is found.
+# The closing day written 08-23-26, a form the check does not know, and the
+# period before it as 07-24-26, so neither its day nor another's is found.
 UNKNOWN_FORM = testkit.text_pdf(["Navy Federal Credit Union", "Statement of Account",
-                                 "Statement period 07-16-26 to 08-15-26", CHECKING,
+                                 "Statement period 07-24-26 to 08-23-26", CHECKING,
                                  "Beginning balance and ending balance"])
 
 
@@ -150,9 +150,9 @@ def test_a_statement_printing_its_day_in_a_form_not_known_is_kept(tmp_path, monk
     """Nothing in it names another statement, so nothing says it is not this
     one. On a day no other account is billed the capture once made the
     plain check of its day and destroyed it for that day not being found."""
-    listed = LISTED if shared else [r for r in LISTED if r != ("2026-08-15", CARD)]
+    listed = LISTED if shared else [r for r in LISTED if r != ("2026-08-23", CARD)]
     app, filed = _run(tmp_path, monkeypatch, listed=listed,
-                      brings={("2026-08-15", CHECKING): UNKNOWN_FORM})
+                      brings={("2026-08-23", CHECKING): UNKNOWN_FORM})
     assert len(filed) == len(listed) and not app.stats["wrong_document"], filed
 
 
@@ -163,13 +163,13 @@ def test_a_refused_statement_that_cannot_be_removed_is_not_said_to_be_destroyed(
     real_unlink = Path.unlink
 
     def held(self, *a, **kw):
-        if self.parent == tmp_path and self.name.startswith("2026-08-15") and "Checking" in self.name:
+        if self.parent == tmp_path and self.name.startswith("2026-08-23") and "Checking" in self.name:
             raise PermissionError("held")
         return real_unlink(self, *a, **kw)
 
     monkeypatch.setattr(Path, "unlink", held)
     app, filed = _run(tmp_path, monkeypatch,
-                      brings={("2026-08-15", CHECKING): ("2026-07-15", CHECKING)})
+                      brings={("2026-08-23", CHECKING): ("2026-07-23", CHECKING)})
     assert len(filed) == 6 and not app.stats["wrong_document"], filed
 
 
@@ -177,5 +177,5 @@ def test_each_check_is_handed_one_kind(monkeypatch):
     docs = [app_mod.Document(date=day, account=acct, document_id=str(n))
             for n, (day, acct) in enumerate(LISTED)]
     same_day, near = app_mod.App._rivals(docs, docs[2])
-    assert [(r.date, r.label) for r in same_day] == [("2026-08-15", CARD)]
-    assert [(r.date, r.label) for r in near] == [("2026-09-15", CHECKING), ("2026-07-15", CHECKING)]
+    assert [(r.date, r.label) for r in same_day] == [("2026-08-23", CARD)]
+    assert [(r.date, r.label) for r in near] == [("2026-09-23", CHECKING), ("2026-07-23", CHECKING)]

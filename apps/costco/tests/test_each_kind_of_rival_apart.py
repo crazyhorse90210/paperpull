@@ -34,7 +34,7 @@ from paperpull_core.models import Item, Purchase
 # Newest first, as process_purchases takes them. Two warehouse visits on
 # the 15th, the 60.00 one beside a gas fill of 60.00 on the 9th, and the
 # 143.21 one beside a visit of 143.21 on the 2nd.
-LISTED = [("2026-08-20", "77.10"), ("2026-08-15", "60.00"), ("2026-08-15", "143.21"),
+LISTED = [("2026-08-21", "77.10"), ("2026-08-15", "60.00"), ("2026-08-15", "143.21"),
           ("2026-08-09", "60.00"), ("2026-08-02", "143.21"), ("2026-07-30", "12.34")]
 
 
@@ -145,9 +145,9 @@ def test_a_receipt_printing_its_day_and_total_in_forms_not_known_is_kept(tmp_pat
     so nothing says it is not this one, and the render once made the plain
     check and destroyed it for its day and total not being found."""
     unknown = testkit.text_pdf(["COSTCO WHOLESALE", "Kirkland Signature Paper Towels",
-                                "TOTAL SEVENTY SEVEN 10", "20 AUG 26 14:02",
+                                "TOTAL SEVENTY SEVEN 10", "21 AUG 26 14:02",
                                 "THANK YOU PLEASE COME AGAIN"])
-    app, filed = _run(tmp_path, monkeypatch, brings={("2026-08-20", "77.10"): unknown})
+    app, filed = _run(tmp_path, monkeypatch, brings={("2026-08-21", "77.10"): unknown})
     assert filed == 6 and not app.stats["wrong_document"], dict(app.stats)
 
 
