@@ -753,7 +753,7 @@ def controls_named(page, name_re: Pattern, roles=("button", "link")):
 # ---------------------------------------------------------------------------
 # Paging forward
 #
-# Pagination needs its own judgement, and finding that out took a while.
+# Pagination needs its own judgment, and finding that out took a while.
 # Every blocklist here refuses the word "next", correctly, because "Next" is
 # what a wizard's commit button says. Eight apps then handed a pagination
 # control to that same blocklist, so a control labeled "Next" was refused and

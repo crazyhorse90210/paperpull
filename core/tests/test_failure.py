@@ -429,6 +429,88 @@ def test_summarizing_something_that_is_not_a_report_is_empty():
     assert failure.summarize({}) == []
 
 
+# -- a file read back after a person or a disk changed it ----------------------
+
+# Which part of the summary says what, and the fields of the report it reads.
+SAYS = {
+    "selectors": ("is not a selector the browser accepts", {"selectors", "page"}),
+    "page": ("password field", {"page"}),
+    "kept": ("nought by nought", {"extra"}),
+    "identity": ("held no text", {"identity"}),
+    "requests": ("answered 404", {"requests"}),
+    "journal": ("only the part after the # changed", {"journal"}),
+    "parser": ("looked like items", {"extra"}),
+}
+
+
+def a_report_every_part_speaks_about():
+    from paperpull_core import identity
+    return {
+        "selectors": [{"name": "rows", "evaluation": "invalid_css_selector",
+                       "matched": 2, "visible": 0,
+                       "nodes": [{"signal_classes": ["modal"],
+                                  "role": "dialog"}]}],
+        "page": {"counts": {"passwords": 1}, "body_overflow": "hidden"},
+        "extra": {"postmortem": {"kept": {"box": [0, 0]}},
+                  "parser": {"candidates": 3, "accepted": 0,
+                             "rejected": {"no_price": 3}}},
+        "identity": {"outcome": identity.UNREADABLE},
+        "requests": {"counts": {"provider": 1},
+                     "seen": [{"kind": "json", "status": 404, "path": "/y",
+                               "method": "get"}]},
+        "journal": {"entries": [{"kind": "checkpoint", "name": "one",
+                                 "route_change": "hash"}]},
+    }
+
+
+def places(value, here=()):
+    yield here
+    if isinstance(value, dict):
+        for k, v in value.items():
+            yield from places(v, here + (k,))
+    elif isinstance(value, list):
+        for i, v in enumerate(value):
+            yield from places(v, here + (i,))
+
+
+def test_every_part_of_the_summary_speaks_about_the_report_below():
+    """So a part found silent in the next test was silenced by the field
+    broken there, not by a report it had nothing to say about."""
+    said = " ".join(failure.summarize(a_report_every_part_speaks_about()))
+    for part, (sentence, _) in SAYS.items():
+        assert sentence in said, part
+
+
+def test_a_field_of_the_wrong_type_never_takes_the_rest_of_the_summary():
+    """Every field of a report in turn, holding each wrong type a JSON
+    file can carry. The apps read their failure file back and print this
+    summary, so a raise anywhere in it cost every sentence, and a
+    selector, a page count, an identity, a request or a journal entry of
+    the wrong type raised. Now the part reading that field says nothing
+    and every other part still speaks."""
+    wrong = (None, "x", "404", 404.5, True, -1, 10 ** 30, [], {}, [1, "a"],
+             {"a": [1]})
+    for where in list(places(a_report_every_part_speaks_about())):
+        for value in wrong:
+            report = a_report_every_part_speaks_about()
+            if not where:
+                report = value
+            else:
+                holder = report
+                for step in where[:-1]:
+                    holder = holder[step]
+                holder[where[-1]] = value
+            said = failure.summarize(report)
+            assert isinstance(said, list), (where, value)
+            assert all(isinstance(s, str) for s in said), (where, value)
+            if not where:
+                continue
+            joined = " ".join(said)
+            for part, (sentence, reads) in SAYS.items():
+                if where[0] not in reads:
+                    assert sentence in joined, (part, where, value)
+
+
 def test_a_census_of_four_hundred_selectors_is_cut():
     big = {"sel%d" % i: ".c%d" % i for i in range(400)}
     assert len(failure.census(FakePage(), big)) <= 40
