@@ -17,6 +17,7 @@ import portlandgeneral_site as site  # noqa: E402
 import portlandgeneral_docs as docs  # noqa: E402
 
 FAKE_ACCOUNT = "9876500012"
+OTHER_ACCOUNT = "9876500034"
 FAKE_NAME = "Zyxwvut, Qponmlk"
 FAKE_STREET = "Wvutsrq"
 FAKE_TOKEN = "Bearer fake-token-not-real-0000"
@@ -39,9 +40,11 @@ ROWS = [bill("2026-09-30", "ref+A1"), payment("2026-09-20"), bill("2026-08-31", 
         payment("2026-08-20"), bill("2026-07-31", "ref=C3")]
 
 
-def answer(rows, total=None, accounts=1):
-    acct = {"accountNumber": FAKE_ACCOUNT, "mainCustomerName": FAKE_NAME,
-            "coCustomerNames": [], "premiseInfo": [{"addressLine1": f"100 {FAKE_STREET} St"}],
+def answer(rows, total=None, accounts=1, number=FAKE_ACCOUNT):
+    acct = {"accountNumber": number, "mainCustomerName": FAKE_NAME,
+            "coCustomerNames": [], "premiseInfo": [{"addressLine1": f"100 {FAKE_STREET} St",
+                                                    "city": "Portland", "postal": "97201",
+                                                    "description": "Main House"}],
             "paymentHistory": {"paymentHistoryDetails": rows,
                                "totalDetailsRecords": len(rows) if total is None else total}}
     return {"data": {"getAccountDetails": [acct] * accounts}}
@@ -65,6 +68,17 @@ class Req:
 
     def all_headers(self):
         return dict(self._headers)
+
+
+def info_body():
+    return {"operationName": "getAccountInfo",
+            "query": "query getAccountInfo($params: X) { getAccountInfo { x } }",
+            "variables": {"params": {}}}
+
+
+def info_answer(total):
+    return {"data": {"getAccountInfo": {"accountMeta": {"totalAccounts": total,
+                                                        "hasInactiveAccounts": False}}}}
 
 
 class Resp:
@@ -92,8 +106,12 @@ class Page:
     page's own request, further pages and PDFs are asked through evaluate."""
 
     def __init__(self, rows=ROWS, limit=2, settled=None, first=None, pdf=PDF, pdf_status=200,
-                 pages=None, headers=None):
+                 pages=None, headers=None, accounts=None, number=FAKE_ACCOUNT, pdfs=None):
         self.rows, self.limit = rows, limit
+        self.accounts, self.number = accounts, number
+        # The PDF answers in turn, when they differ from one ask to the next.
+        self.pdfs = pdfs
+        self.opened = 0
         self.url = "about:blank"
         self.settled = settled or site.DOCUMENTS_URL
         self.first = first
@@ -115,9 +133,13 @@ class Page:
 
     def goto(self, url, **k):
         self.url = self.settled
+        self.opened += 1
+        if self.accounts is not None:
+            for h in list(self.handlers):
+                h(Resp(info_answer(self.accounts), body=info_body()))
         resp = self.first if self.first is not None else Resp(
-            answer(self.rows[:self.limit], total=len(self.rows)), body=history_body(self.limit),
-            headers=self.headers)
+            answer(self.rows[:self.limit], total=len(self.rows), number=self.number),
+            body=history_body(self.limit), headers=self.headers)
         if resp != "none":
             for h in list(self.handlers):
                 h(resp)
@@ -132,7 +154,13 @@ class Page:
             off = body["variables"]["paymentHistoryParams"]["pagingParams"]["offset"]
             if self.pages is not None:
                 return self.pages.pop(0)
-            return {"status": 200, "data": answer(self.rows[off:off + self.limit], total=len(self.rows))}
+            return {"status": 200, "data": answer(self.rows[off:off + self.limit], total=len(self.rows),
+                                                  number=self.number)}
+        if self.pdfs:
+            status, data = self.pdfs.pop(0)
+            if status != 200:
+                return {"status": status, "type": "application/json"}
+            return {"status": 200, "type": "application/pdf", "b64": base64.b64encode(data).decode()}
         if self.pdf_status != 200:
             return {"status": self.pdf_status, "type": "application/json"}
         return {"status": 200, "type": "application/pdf", "b64": base64.b64encode(self.pdf).decode()}
@@ -173,6 +201,40 @@ class Controls(unittest.TestCase):
         self.assertIsNotNone(site.FORBIDDEN_CONTROL_RE.search("Edit profile"))
 
 
+class Challenge(unittest.TestCase):
+    class Shown:
+        def __init__(self, url, text, sign_out=True):
+            self.url, self.text, self.sign_out = url, text, sign_out
+
+        def get_by_role(self, role, name=None):
+            return Locator(1 if self.sign_out and name is site.SIGN_OUT_RE else 0)
+
+        def title(self):
+            return ""
+
+        def locator(self, sel):
+            page = self
+
+            class Body:
+                def inner_text(self, timeout=0):
+                    return page.text
+            return Body()
+
+    BANNER = "Sign out\nProtect your account even more by enabling Two-Step Authentication."
+
+    def test_a_signed_in_page_inviting_two_step_is_not_a_challenge(self):
+        self.assertIsNone(site.detect_security_challenge(
+            self.Shown("https://portlandgeneral.com/secure/account/summary", self.BANNER)))
+
+    def test_a_real_prompt_or_an_ended_session_still_is(self):
+        for page in (self.Shown("https://portlandgeneral.com/auth/sign-in", "Enter the code we sent"),
+                     self.Shown("https://portlandgeneral.com/secure/account/summary", self.BANNER,
+                                sign_out=False),
+                     self.Shown("https://portlandgeneral.com/secure/account/summary",
+                                "Sign out\nYour session has expired.")):
+            self.assertIsNotNone(site.detect_security_challenge(page), page.url)
+
+
 class HistoryRequest(unittest.TestCase):
     def test_the_pages_own_query_is_recognized(self):
         self.assertTrue(site.is_history_request("POST", site.GRAPHQL_URL, json.dumps(history_body())))
@@ -193,27 +255,54 @@ class HistoryRequest(unittest.TestCase):
 
 
 class Rows(unittest.TestCase):
-    def test_bills_only_dated_and_keyed_by_their_day(self):
-        got = site.bills_of(ROWS)
+    def test_bills_only_dated_and_keyed_by_their_account_and_day(self):
+        got = site.bills_of(ROWS, FAKE_ACCOUNT)
         self.assertEqual([d.date_text for d in got], ["2026-09-30", "2026-08-31", "2026-07-31"])
-        self.assertEqual([d.document_id for d in got], ["bill-2026-09-30", "bill-2026-08-31", "bill-2026-07-31"])
+        self.assertEqual([d.document_id for d in got],
+                         ["bill-0012-2026-09-30", "bill-0012-2026-08-31", "bill-0012-2026-07-31"])
         self.assertEqual({d.href for d in got}, {site.DOWNLOAD_PATH})
         self.assertEqual(got[1].bill_ref, "ref/B2")
+        self.assertNotIn(FAKE_ACCOUNT, repr(got))
 
     def test_unreadable_rows_stop_the_list_with_what_was_read(self):
         for broken in (dict(bill("2026-06-30", ""), encryptedBillId=""),
                        dict(bill("2026-06-30", "r"), date="2026-02-30T00:00:00.000Z"),
                        dict(bill("2026-06-30", "r"), date="June 30"),
-                       bill("2026-09-30", "again"),
                        "not a row"):
             with self.assertRaises(site.ListStopped) as stop:
-                site.bills_of(ROWS + [broken])
+                site.bills_of(ROWS + [broken], FAKE_ACCOUNT)
             self.assertEqual(len(stop.exception.docs), 3, broken)
+
+    def test_a_row_of_a_type_it_does_not_know_stops_the_list_and_is_named(self):
+        for kind, named in (("Rebill", "'Rebill'"), ("Corrected Bill", "'Corrected Bill'"),
+                            (None, "type this"), ("<b>x</b>", "type this")):
+            with self.assertRaises(site.ListStopped) as stop:
+                site.bills_of(ROWS + [dict(bill("2026-06-30", "r"), type=kind)], FAKE_ACCOUNT)
+            self.assertEqual(len(stop.exception.docs), 3)
+            self.assertIn(named, str(stop.exception))
+        self.assertNotIn("<b>", str(stop.exception))
+
+    def test_two_bills_of_one_date_refuse_that_date_alone(self):
+        got = site.bills_of(ROWS + [bill("2026-09-30", "again")], FAKE_ACCOUNT)
+        self.assertEqual(len(got), 4)
+        self.assertEqual(site.colliding_dates(got), ["2026-09-30"])
+        self.assertEqual(site.colliding_dates(site.bills_of(ROWS, FAKE_ACCOUNT)), [])
 
     def test_an_answer_for_other_than_one_account_stops(self):
         for a in (answer(ROWS, accounts=2), answer(ROWS, accounts=0), {"data": {}}, [], {"data": {"getAccountDetails": [{}]}}):
             with self.assertRaises(site.ListStopped):
                 site.history_page(a)
+        for number in ("", "12-34", None, "x" * 10):
+            with self.assertRaises(site.ListStopped):
+                site.account_of(answer(ROWS, number=number))
+        self.assertEqual(site.account_of(answer(ROWS)), FAKE_ACCOUNT)
+
+    def test_accounts_held_is_read_from_account_info_only(self):
+        self.assertEqual(site.accounts_held(info_answer(3)), 3)
+        for a in ({}, {"data": {"getAccountInfo": {}}}, info_answer("3"), info_answer(True), info_answer(-1)):
+            self.assertIsNone(site.accounts_held(a))
+        self.assertTrue(site.is_account_info_request("POST", site.GRAPHQL_URL, json.dumps(info_body())))
+        self.assertFalse(site.is_account_info_request("POST", site.GRAPHQL_URL, json.dumps(history_body())))
 
     def test_errors_saying_the_session_ended_are_session_expired(self):
         with self.assertRaises(site.SessionExpired):
@@ -239,9 +328,33 @@ class ListWhole(unittest.TestCase):
     def test_a_short_or_changing_history_stops(self):
         short = Page(limit=2, pages=[{"status": 200, "data": answer([], total=5)}])
         changed = Page(limit=2, pages=[{"status": 200, "data": answer(ROWS[2:4], total=6)}])
-        for page in (short, changed):
+        moved = Page(limit=2, pages=[{"status": 200, "data": answer(ROWS[2:4], total=5,
+                                                                    number=OTHER_ACCOUNT)}])
+        for page in (short, changed, moved):
             with self.assertRaises(site.ListStopped):
                 site.collect_download_docs(page)
+
+    def test_a_page_that_repeats_rows_stops_whatever_their_type(self):
+        # Paging that did not move on gives the first page again, payment
+        # and all, with fresh bill ids.
+        again = [dict(ROWS[0], encryptedBillId="fresh"), ROWS[1]]
+        page = Page(limit=2, pages=[{"status": 200, "data": answer(again, total=5)}])
+        with self.assertRaises(site.ListStopped) as stop:
+            site.collect_download_docs(page)
+        self.assertIn("earlier page", str(stop.exception))
+        payments = [payment("2026-09-20"), payment("2026-09-20"), bill("2026-08-31", "b")]
+        self.assertEqual(len(site.collect_download_docs(Page(rows=payments, limit=2))), 1,
+                         "two payments alike on one page are a person's, not paging")
+
+    def test_a_walk_that_does_not_start_at_the_first_row_stops(self):
+        page = Page(limit=2, first=Resp(answer(ROWS[:2], total=5), body=history_body(2, offset=2)))
+        with self.assertRaises(site.ListStopped):
+            site.collect_download_docs(page)
+
+    def test_other_accounts_are_counted_from_the_pages_own_answer(self):
+        for accounts, others in ((None, 0), (1, 0), (3, 2)):
+            site.collect_download_docs(Page(accounts=accounts))
+            self.assertEqual(site.other_accounts(), others, accounts)
 
     def test_a_refused_page_is_session_expired(self):
         page = Page(limit=2, pages=[{"status": 401}])
@@ -260,47 +373,87 @@ class ListWhole(unittest.TestCase):
 
     def test_a_signed_out_site_is_session_expired(self):
         with self.assertRaises(site.SessionExpired):
-            site.collect_download_docs(Page(first="none", settled="https://portlandgeneral.com/sign-in"))
+            site.collect_download_docs(Page(first="none", settled="https://portlandgeneral.com/auth/sign-in"))
 
     def test_bill_list_opens(self):
         self.assertTrue(site.bill_list_opens(Page()))
         self.assertFalse(site.bill_list_opens(Page(first="none")))
 
 
+AUG = "bill-0012-2026-08-31"
+
+
+def fetch(page, out, date="2026-08-31", doc_id=AUG, href=site.DOWNLOAD_PATH):
+    return site.download_bill(page, None, date, out, href=href, document_id=doc_id)
+
+
 class Download(unittest.TestCase):
     def setUp(self):
         self.out = Path(tempfile.mkdtemp()) / "Statements" / "bill.pdf"
+        site._RUN.clear()
 
     def test_the_detailed_bill_of_that_day_is_asked_for_and_saved(self):
         page = Page(limit=10)
-        self.assertTrue(site.download_bill(page, None, "2026-08-31", self.out,
-                                           href=site.DOWNLOAD_PATH, document_id="bill-2026-08-31"))
+        self.assertTrue(fetch(page, self.out))
         self.assertEqual(self.out.read_bytes(), PDF)
         url, headers, body = page.asked[-1]
         self.assertEqual(url, site.PDF_URL)
         self.assertEqual(body, {"encryptedBillId": "ref/B2", "isSummary": False, "isNonDetailed": False})
         self.assertEqual(set(headers), {"authorization", "aws_graphql_server"})
 
+    def test_the_list_is_read_once_a_run(self):
+        page = Page(limit=2)
+        site.collect_download_docs(page)
+        for date, doc_id in (("2026-09-30", "bill-0012-2026-09-30"), ("2026-08-31", AUG),
+                             ("2026-07-31", "bill-0012-2026-07-31")):
+            self.assertTrue(fetch(page, self.out, date, doc_id))
+        self.assertEqual(page.opened, 1)
+        self.assertEqual([u for u, _, _ in page.asked].count(site.GRAPHQL_URL), 2)
+
+    def test_a_refused_pdf_reads_the_list_again_once(self):
+        for first in ((500, b""), (401, b""), (200, b'{"error":"expired"}')):
+            page = Page(limit=10, pdfs=[first, (200, PDF)])
+            site.collect_download_docs(page)
+            self.assertTrue(fetch(page, self.out), first)
+            self.assertEqual(page.opened, 2, first)
+
     def test_a_record_that_does_not_match_is_not_fetched(self):
         page = Page(limit=10)
-        for date, doc_id, href in (("2026-08-31", "bill-2026-07-31", site.DOWNLOAD_PATH),
-                                   ("2026-01-31", "bill-2026-01-31", site.DOWNLOAD_PATH),
-                                   ("2026-08-31", "bill-2026-08-31", "/other")):
-            self.assertFalse(site.download_bill(page, None, date, self.out, href=href, document_id=doc_id))
+        for date, doc_id, href in (("2026-08-31", "bill-0012-2026-07-31", site.DOWNLOAD_PATH),
+                                   ("2026-01-31", "bill-0012-2026-01-31", site.DOWNLOAD_PATH),
+                                   ("2026-08-31", "bill-2026-08-31", site.DOWNLOAD_PATH),
+                                   ("2026-08-31", AUG, "/other")):
+            self.assertFalse(fetch(page, self.out, date, doc_id, href))
         self.assertFalse(any(u == site.PDF_URL for u, _, _ in page.asked))
         self.assertFalse(self.out.exists())
 
-    def test_refused_and_sign_in_answers_raise_and_save_nothing(self):
-        for page in (Page(limit=10, pdf_status=401), Page(limit=10, pdf=b'{"error":"expired"}')):
+    def test_a_bill_of_another_account_is_never_fetched(self):
+        # Discover listed account ...0012; the page now shows ...0034, which
+        # has a bill of the same date.
+        page = Page(limit=10, number=OTHER_ACCOUNT)
+        site.collect_download_docs(page)
+        self.assertFalse(fetch(page, self.out))
+        self.assertFalse(any(u == site.PDF_URL for u, _, _ in page.asked))
+        self.assertFalse(self.out.exists())
+
+    def test_a_date_two_bills_carry_is_refused_and_the_rest_are_taken(self):
+        page = Page(rows=ROWS + [bill("2026-08-31", "again")], limit=10)
+        site.collect_download_docs(page)
+        self.assertFalse(fetch(page, self.out))
+        self.assertFalse(self.out.exists())
+        self.assertTrue(fetch(page, self.out, "2026-09-30", "bill-0012-2026-09-30"))
+
+    def test_a_refusal_on_a_list_just_read_ends_the_session(self):
+        for page in (Page(limit=10, pdf_status=401), Page(limit=10, pdf_status=403)):
             with self.assertRaises(site.SessionExpired):
-                site.download_bill(page, None, "2026-08-31", self.out,
-                                   href=site.DOWNLOAD_PATH, document_id="bill-2026-08-31")
+                fetch(page, self.out)
             self.assertFalse(self.out.exists())
 
-    def test_other_non_pdfs_are_refused_without_a_file(self):
-        for page in (Page(limit=10, pdf=b"GIF89a"), Page(limit=10, pdf_status=500)):
-            self.assertFalse(site.download_bill(page, None, "2026-08-31", self.out,
-                                                href=site.DOWNLOAD_PATH, document_id="bill-2026-08-31"))
+    def test_other_non_pdfs_fail_that_bill_alone(self):
+        for page in (Page(limit=10, pdf=b"GIF89a"), Page(limit=10, pdf_status=500),
+                     Page(limit=10, pdf=b'{"error":"no such bill"}'), Page(limit=10, pdf=b"<html>")):
+            site._RUN.clear()
+            self.assertFalse(fetch(page, self.out))
             self.assertFalse(self.out.exists())
 
 
@@ -318,19 +471,38 @@ class Orchestrator(unittest.TestCase):
 
     def test_persisted_record_holds_no_bill_ref_and_is_keyed_by_the_day(self):
         app = make_app(self.tmp, "--discover")
-        for r in site.bills_of(ROWS):
+        for r in site.bills_of(ROWS, FAKE_ACCOUNT):
             app._record_rawdoc(r, site.BILLING_URL)
         app.discovery.save()
         text = app.paths.discovery_json.read_text()
-        for ref in ("ref+A1", "ref/B2", "ref=C3"):
+        for ref in ("ref+A1", "ref/B2", "ref=C3", FAKE_ACCOUNT):
             self.assertNotIn(ref, text)
-        rec = app.discovery.get("id:bill-2026-09-30")
+        rec = app.discovery.get("id:bill-0012-2026-09-30")
         self.assertEqual((rec["href"], rec["document_id"], rec["account"]),
-                         (site.DOWNLOAD_PATH, "bill-2026-09-30", ""))
+                         (site.DOWNLOAD_PATH, "bill-0012-2026-09-30", ""))
+
+    def test_bills_of_two_accounts_on_one_date_are_two_records(self):
+        app = make_app(self.tmp, "--discover")
+        for account in (FAKE_ACCOUNT, OTHER_ACCOUNT):
+            for r in site.bills_of(ROWS, account):
+                app._record_rawdoc(r, site.BILLING_URL)
+        self.assertEqual(len(app.discovery.data), 6)
+        self.assertEqual(docs.told_apart_by({"document_id": "bill-0034-2026-09-30"}), "0034")
+
+    def test_discover_names_a_colliding_date_and_other_accounts(self):
+        app = make_app(self.tmp, "--discover")
+        app.check_session = lambda page: None
+        app._on_its_site = lambda: Page(rows=ROWS + [bill("2026-08-31", "again")], limit=10, accounts=2)
+        with redirect_stdout(io.StringIO()) as said:
+            app.cmd_discover()
+        out = " ".join(said.getvalue().split())
+        self.assertIn("Two bills carry the date 2026-08-31", out)
+        self.assertIn("holds 1 other account", out)
+        self.assertEqual(len(app.discovery.data), 3)
 
     def test_an_expired_session_stops_the_run_and_records_nothing(self):
         app = make_app(self.tmp, "--all")
-        for r in site.bills_of(ROWS):
+        for r in site.bills_of(ROWS, FAKE_ACCOUNT):
             app._record_rawdoc(r, site.BILLING_URL)
         app.check_session = lambda page: None
         app._on_its_site = lambda: Page()
@@ -415,6 +587,8 @@ class Privacy(unittest.TestCase):
             self.assertNotIn(word, out)
         for word in (FAKE_ACCOUNT, FAKE_STREET, "Zyxwvut", "Qponmlk"):
             self.assertIn(word, site.private_words())
+        for word in ("Portland", "97201", "Main", "House"):
+            self.assertNotIn(word, site.private_words(), "the city, postal code and description are left out")
         self.assertEqual(len(list(app.paths.root.rglob("*.pdf"))), 1)
 
 

@@ -15,11 +15,16 @@ SEEN SIGNED IN, 2026-10-29 (shapes only, no values kept):
   * Its rows come from POST /pge-graphql, operationName getAccountDetails,
     variables {params: {accountNumberList: [{accountNumber,
     encryptedPersonId}]}, paymentHistoryParams: {pagingParams: {limit,
-    offset}}}. The answer's data.getAccountDetails[0].paymentHistory holds
-    paymentHistoryDetails, rows of {date (ISO), amountDue, amountPaid,
+    offset}}}, for the one account the page shows. The answer's
+    data.getAccountDetails[0] holds that accountNumber and a paymentHistory
+    of paymentHistoryDetails, rows of {date (ISO), amountDue, amountPaid,
     encryptedBillId, billingPeriodStartDate, billingPeriodEndDate, kwh,
     type}, where type is "Bill" or "Payment", and totalDetailsRecords for
     paging. 15 rows on the first page seen.
+  * The page also asks getAccountInfo, whose accountMeta.totalAccounts says
+    how many accounts the sign-in holds. The account shown is chosen on
+    the site; this app reads whichever one that is and says when there are
+    others.
   * Each bill row offers two links, "Simplified Bill (PDF)" and "Detailed
     Bill (PDF)", both href="#". Pressing one sends POST
     /pge-bill-api/pdf/bills with JSON {encryptedBillId, isSummary,
@@ -32,6 +37,10 @@ SEEN SIGNED IN, 2026-10-29 (shapes only, no values kept):
     /pge-bill-api/pdf/bills for each bill with {isSummary: false,
     isNonDetailed: false}, the Detailed Bill. The header values stay in
     memory and are never written.
+  * A bill is known by the last four digits of its account and its date,
+    "bill-1234-2026-09-30", since the encryptedBillId is issued afresh with
+    every answer. The list is read once a run and kept in memory, and read
+    again only when a bill's PDF is refused.
 
 Sign-in, with any verification code, is the account holder's own, in the
 browser.
@@ -48,6 +57,7 @@ SAFETY (a utility account that can pay, enroll and start or stop service):
 """
 from __future__ import annotations
 
+import copy
 import logging
 import json
 import re
@@ -59,6 +69,7 @@ from typing import List, Optional, Tuple
 from urllib.parse import urlsplit
 
 from paperpull_core import intake
+from paperpull_core.characters import whole_json
 from paperpull_core.controls import SETTINGS_CONTROL_RE, AUTH_CONTROL_RE
 from paperpull_core.redact import private_words, redact, set_private_words  # noqa: F401  (re-exported)
 from paperpull_core.urls import is_safe_url as _host_allows
@@ -79,7 +90,6 @@ def _words():
 # Addresses
 # ---------------------------------------------------------------------------
 BASE = "https://portlandgeneral.com"
-PORTAL = f"{BASE}/portal"
 DOCUMENTS_PATH = "/secure/payment/billing-payment-history"  # seen signed in, 2026-10-29
 DOCUMENTS_URL = BASE + DOCUMENTS_PATH
 # The account API the signed-in pages ask. Its list and its PDFs are asked
@@ -87,23 +97,24 @@ DOCUMENTS_URL = BASE + DOCUMENTS_PATH
 API = "https://api.portlandgeneral.com"
 GRAPHQL_URL = API + "/pge-graphql"
 HISTORY_OPERATION = "getAccountDetails"
+ACCOUNT_INFO_OPERATION = "getAccountInfo"
 PDF_URL = API + "/pge-bill-api/pdf/bills"
 # What discovery records as every bill's href. The bill itself is named by
 # an encryptedBillId the API issues afresh with each answer, so it is never
-# kept: the bill is found again by its date when it is fetched.
+# kept: the bill is found again by its account and date when it is fetched.
 DOWNLOAD_PATH = "/pge-bill-api/pdf/bills"
 STATEMENTS_URL = DOCUMENTS_URL
 BILLING_URL = DOCUMENTS_URL
 URLS = {
-    # NOT YET MAPPED: the site's home page, where the account holder signs
-    # in, until a recording shows where the account pages live.
     "home": f"{BASE}/",
-    "login": f"{BASE}/",
+    "login": f"{BASE}/auth/sign-in",
     "documents": DOCUMENTS_URL,
     "statements": DOCUMENTS_URL,
 }
 
-LOGIN_URL_MARKERS = ["/prelogin/", "/accounts/logout", "/account/login", "/login"]
+# A signed-out visit to a /secure/ page is sent to /auth/sign-in (seen
+# 2026-10-30), where the account holder signs in.
+LOGIN_URL_MARKERS = ["/auth/"]
 
 # ---------------------------------------------------------------------------
 # HARD SAFETY GUARD. Tuned for a utility portal. Every stem anchored so
@@ -125,12 +136,11 @@ FORBIDDEN_CONTROL_RE = re.compile(
     r"\bsmart\s+thermostat\b|\brebates?\b|\bclean\s+wind\b|"
     r"\brebalance\b|\bliquidate\b|\bdetails\b)", re.I)
 
-# The document actions this app would ever accept, anchored whole: the
-# portal's own "View Your Detailed Bill PDF", "Download Your Solar Bill" and
-# "View Bill", and the "View Utility Bill" its rules name. Nothing looser,
-# so a label carrying anything more is refused.
-# The two links each bill row offers. This app presses neither; they are
-# named here for the survey's verdicts.
+# The document actions this app would ever accept, anchored whole: the two
+# links each bill row offers, "Simplified Bill (PDF)" and "Detailed Bill
+# (PDF)", and "View Bill Online". This app presses none of them; they are
+# named here for the survey's verdicts. Nothing looser, so a label carrying
+# anything more is refused.
 SAFE_DOC_CONTROL_RES = (
     re.compile(r"^(simplified|detailed)\s+bill\s+\(pdf\)$", re.I),
     re.compile(r"^view\s+bill\s+online$", re.I),
@@ -148,13 +158,17 @@ SECURITY_CHALLENGE_MARKERS = [
     "access denied",
 ]
 
+# What a signed-in page can still say when the session is over. A signed-in
+# page is otherwise not read for the markers above: Account Summary invites
+# the account holder to turn on "Two-Step Authentication" (seen 2026-10-30).
+SESSION_OVER_MARKERS = ["your session has expired", "log back in", "access denied"]
+SIGN_OUT_RE = re.compile(r"^\s*sign\s*out\s*$", re.I)
+
 RATE_LIMIT_MARKERS = [
     "too many requests", "rate limit", "try again later",
     "temporarily unavailable", "http error 429", "unusual traffic",
 ]
 
-# A bill's row on Billing History, and the table plugin's own cell for a
-# table with no rows.
 # For Diagnose's counts only: the bill links the page draws, two per bill.
 BILL_ROW = "a[href$='#']"
 
@@ -227,36 +241,14 @@ def parse_period_date(text: str) -> Tuple[Optional[str], str]:
     return None, ""
 
 
-# A bill row's statement date, exactly as the table writes it: "Sep 12, 2026".
-_STATEMENT_DATE_RE = re.compile(
-    r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+([0-9]{1,2}),\s+([0-9]{4})")
-# The words that head the column that date is read from. A header holding
-# both, as "Statement Date" or "Statement Date *" does, and "Due Date" does
-# not, since the live header has only been named, never seen whole.
-STATEMENT_HEAD_WORDS = frozenset({"statement", "date"})
-
-
-def statement_date(text) -> Optional[str]:
-    """A bill row's statement date as YYYY-MM-DD, or None. The whole cell
-    must be the date and the day must exist; nothing is found inside other
-    text."""
-    m = _STATEMENT_DATE_RE.fullmatch(re.sub(r"\s+", " ", str(text or "")).strip())
-    if not m:
-        return None
-    try:
-        return _date(int(m.group(3)), _MONTHS[m.group(1).lower()], int(m.group(2))).isoformat()
-    except ValueError:
-        return None
-
-
 # ---------------------------------------------------------------------------
 # Session / safety
 # ---------------------------------------------------------------------------
 
 class SessionExpired(Exception):
-    """portlandgeneral.com answered as a signed-out session: its sign-in page,
-    a redirect where a bill was asked for, a 401, or an HTML or JSON body
-    where a PDF was expected. The run stops for the account holder."""
+    """portlandgeneral.com answered as a signed-out session: its sign-in
+    page, or a 401, 403 or redirect from the account API on a list just
+    read again. The run stops for the account holder."""
 
 
 def looks_signed_out(page) -> bool:
@@ -273,15 +265,28 @@ def looks_signed_out(page) -> bool:
     return False
 
 
+def _signed_in_here(page) -> bool:
+    """A /secure/ page of portlandgeneral.com that offers to sign out."""
+    try:
+        url = page.url or ""
+        if not (is_safe_url(url) and urlsplit(url).path.startswith("/secure/")):
+            return False
+        return any(page.get_by_role(role, name=SIGN_OUT_RE).count() > 0 for role in ("link", "button"))
+    except Exception:
+        return False
+
+
 def detect_security_challenge(page) -> Optional[str]:
     """Names the passcode, CAPTCHA or throttling prompt on screen, or None.
     Visible text only. A page that shows a bill row is not a challenge,
-    whatever its text says further down."""
+    whatever its text says further down, and a signed-in page is read only
+    for a session that is over or throttling."""
     try:
         if page.get_by_role("link", name=BILL_CONTROL_RE).count() > 0:
             return None
     except Exception:
         pass
+    markers = SESSION_OVER_MARKERS if _signed_in_here(page) else SECURITY_CHALLENGE_MARKERS
     try:
         title = (page.title() or "").lower()
     except Exception:
@@ -291,7 +296,7 @@ def detect_security_challenge(page) -> Optional[str]:
     except Exception:
         body = ""
     hay = title + "\n" + body[:1500]
-    for m in SECURITY_CHALLENGE_MARKERS:
+    for m in markers:
         if m in hay:
             return f"Security challenge detected: '{m}'"
     for m in RATE_LIMIT_MARKERS:
@@ -321,7 +326,15 @@ def is_safe_control(name: str) -> bool:
 # The site and the account API its signed-in pages fetch from (seen
 # 2026-10-29). Exact hosts only; analytics and cookie hosts are not allowed.
 ALLOWED_HOSTS = {"portlandgeneral.com", "api.portlandgeneral.com"}
-BILL_ID_RE = re.compile(r"bill-[0-9]{4}-[0-9]{2}-[0-9]{2}")
+# A bill's id: the last four digits of its account, then its date.
+BILL_ID_RE = re.compile(r"bill-([0-9]{4})-([0-9]{4}-[0-9]{2}-[0-9]{2})")
+ACCOUNT_RE = re.compile(r"[0-9]{6,16}")
+# The row types the history holds. A bill is a document and a payment is
+# not; any other type stops the list, so a rebill or a type PGE adds later
+# is named in a failure file rather than passed over.
+BILL_TYPE = "Bill"
+KNOWN_TYPES = frozenset({BILL_TYPE, "Payment"})
+_TYPE_WORD_RE = re.compile(r"[A-Za-z][A-Za-z ]{0,29}")
 _ISO_DAY_RE = re.compile(r"([0-9]{4})-([0-9]{2})-([0-9]{2})(?:T.*)?")
 # The page asks for fifteen rows at a time. A history this many pages long
 # is not a billing history, so the walk stops rather than run on.
@@ -364,6 +377,8 @@ class RawDoc:
     # The API's id for this bill in the answer it came from. Valid only
     # with that answer's authorization, so it is never recorded.
     bill_ref: str = ""
+    # The last four digits of the account the bill belongs to.
+    last4: str = ""
 
 
 class ListStopped(Exception):
@@ -377,29 +392,48 @@ class ListStopped(Exception):
 
 @dataclass
 class _History:
-    """The page's own history request, and what the API answered to it."""
+    """The page's own history request, what the API answered to it, the
+    account it is for, and how many accounts the sign-in holds when the
+    page asked (None when it did not)."""
     body: dict
     headers: dict
     answer: dict
+    account: str = ""
+    accounts: Optional[int] = None
+
+
+def _query_body(method: str, url: str, post_data: Optional[str], operation: str) -> Optional[dict]:
+    """A POST to exactly the GraphQL address naming `operation` and holding
+    a query, never a mutation, as its parsed body, or None."""
+    if (method or "").upper() != "POST" or url != GRAPHQL_URL:
+        return None
+    try:
+        body = whole_json(json.loads(post_data or ""))
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(body, dict) or body.get("operationName") != operation:
+        return None
+    query = str(body.get("query") or "").lstrip()
+    if not query.startswith("query ") or "mutation" in query.split("{", 1)[0].lower():
+        return None
+    return body
+
+
+def is_account_info_request(method: str, url: str, post_data: Optional[str]) -> bool:
+    """Whether a request is the page's own getAccountInfo query."""
+    return _query_body(method, url, post_data, ACCOUNT_INFO_OPERATION) is not None
 
 
 def is_history_request(method: str, url: str, post_data: Optional[str]) -> bool:
     """Whether a request is the page's own billing-history query: a POST to
     exactly the GraphQL address, operation getAccountDetails, with paging
     variables for the payment history, and a query, never a mutation."""
-    if (method or "").upper() != "POST" or url != GRAPHQL_URL:
-        return False
-    try:
-        body = json.loads(post_data or "")
-    except (TypeError, ValueError):
-        return False
-    if not isinstance(body, dict) or body.get("operationName") != HISTORY_OPERATION:
+    body = _query_body(method, url, post_data, HISTORY_OPERATION)
+    if body is None:
         return False
     variables = body.get("variables")
     paging = (variables or {}).get("paymentHistoryParams") if isinstance(variables, dict) else None
-    query = str(body.get("query") or "").lstrip()
-    return (isinstance(paging, dict) and isinstance(paging.get("pagingParams"), dict)
-            and query.startswith("query ") and "mutation" not in query.split("{", 1)[0].lower())
+    return isinstance(paging, dict) and isinstance(paging.get("pagingParams"), dict)
 
 
 def _carried(headers: dict) -> dict:
@@ -421,12 +455,15 @@ def _open(page, timeout_ms: int = 45000) -> _History:
     SessionExpired when the site shows its sign-in page or the API refuses
     the session, and ListStopped when the page never asks. Nothing is
     pressed."""
-    got = []
+    got, info = [], []
 
     def seen(resp):
         try:
-            if not got and is_history_request(resp.request.method, resp.url, resp.request.post_data):
+            req = resp.request
+            if not got and is_history_request(req.method, resp.url, req.post_data):
                 got.append(resp)
+            elif not info and is_account_info_request(req.method, resp.url, req.post_data):
+                info.append(resp)
         except Exception:
             pass
 
@@ -460,7 +497,7 @@ def _open(page, timeout_ms: int = 45000) -> _History:
         raise ListStopped(f"the account API answered the list with {resp.status}")
     try:
         answer = intake.json_of(resp, MAX_LIST_BYTES)
-        body = json.loads(resp.request.post_data or "")
+        body = whole_json(json.loads(resp.request.post_data or ""))
         headers = _carried(resp.request.all_headers())
     except intake.TooLarge:
         raise ListStopped("the billing history answer is larger than any history")
@@ -469,11 +506,38 @@ def _open(page, timeout_ms: int = 45000) -> _History:
     if not headers.get("authorization"):
         raise ListStopped("the page's own list request carried no authorization")
     _keep_private(answer)
-    return _History(body=body, headers=headers, answer=answer)
+    history_page(answer)
+    return _History(body=body, headers=headers, answer=answer, account=account_of(answer),
+                    accounts=_accounts_held(info[0] if info else None))
 
 
-_PRIVATE_FIELDS = ("accountNumber", "mainCustomerName", "coCustomerNames", "description",
-                   "addressLine1", "addressLine2", "city", "postal")
+def _accounts_held(resp) -> Optional[int]:
+    """How many accounts getAccountInfo says the sign-in holds, or None
+    when the page did not ask or the answer cannot be read."""
+    if resp is None or resp.status != 200:
+        return None
+    try:
+        answer = intake.json_of(resp, MAX_LIST_BYTES)
+    except Exception:
+        return None
+    return accounts_held(answer)
+
+
+def accounts_held(answer) -> Optional[int]:
+    """accountMeta.totalAccounts of a getAccountInfo answer, or None."""
+    try:
+        n = answer["data"][ACCOUNT_INFO_OPERATION]["accountMeta"]["totalAccounts"]
+    except (KeyError, TypeError):
+        return None
+    return n if isinstance(n, int) and not isinstance(n, bool) and n >= 0 else None
+
+
+# What names the account holder: the account number, the customers' names
+# and the street. The city, the postal code and the premise's description
+# are left out, since a part of them such as "Portland" or "Main" turned
+# "portlandgeneral.com" and "Maintenance" into "[name]" in what is said.
+_PRIVATE_FIELDS = ("accountNumber", "mainCustomerName", "coCustomerNames",
+                   "addressLine1", "addressLine2")
 
 
 def _keep_private(answer) -> None:
@@ -509,22 +573,36 @@ def _errors_say_signed_out(answer) -> bool:
     return False
 
 
+def _one_account(answer) -> dict:
+    accounts = (((answer or {}).get("data") or {}).get(HISTORY_OPERATION))
+    if not isinstance(accounts, list):
+        raise ListStopped("the billing history answer holds no account")
+    if len(accounts) != 1:
+        raise ListStopped(f"the billing history answer holds {len(accounts)} accounts, and this app reads one")
+    if not isinstance(accounts[0], dict):
+        raise ListStopped("the billing history answer's account could not be read")
+    return accounts[0]
+
+
+def account_of(answer) -> str:
+    """The number of the one account an answer is for."""
+    number = _one_account(answer).get("accountNumber")
+    if not isinstance(number, str) or not ACCOUNT_RE.fullmatch(number.strip()):
+        raise ListStopped("the billing history answer names no account number")
+    return number.strip()
+
+
 def history_page(answer) -> Tuple[list, int]:
     """The payment-history rows of one answer and the total the API says
-    there are. One account only: an answer for none or several stops the
-    list, since a bill's file is named by its date alone."""
+    there are. One account only: the page asks for the account it shows,
+    and an answer for none or several stops the list."""
     if not isinstance(answer, dict):
         raise ListStopped("the billing history answer is not an object")
     if answer.get("errors"):
         if _errors_say_signed_out(answer):
             raise SessionExpired("the account API said the session has ended")
         raise ListStopped("the account API answered the list with errors")
-    accounts = ((answer.get("data") or {}).get(HISTORY_OPERATION))
-    if not isinstance(accounts, list):
-        raise ListStopped("the billing history answer holds no account")
-    if len(accounts) != 1:
-        raise ListStopped(f"the billing history answer holds {len(accounts)} accounts, and this app reads one")
-    history = (accounts[0] or {}).get("paymentHistory")
+    history = _one_account(answer).get("paymentHistory")
     if not isinstance(history, dict):
         raise ListStopped("the account holds no payment history")
     rows = history.get("paymentHistoryDetails")
@@ -546,18 +624,27 @@ def bill_day(text) -> Optional[str]:
         return None
 
 
-def bills_of(rows: list) -> List[RawDoc]:
-    """RawDocs from the history rows, one per row of type "Bill". Payments
-    are not documents and are passed over. A bill row with no id, a date
-    that is not a calendar date, or two bills of one date stops the list,
-    carrying what was read before it, since a bill is found again by its
-    date. Nothing from the row but its date goes into what is said."""
+def bills_of(rows: list, account: str) -> List[RawDoc]:
+    """RawDocs from the history rows of `account`, one per row of type
+    "Bill", known by the account's last four digits and the bill's date.
+    Payments are not documents and are passed over. A row of a type this
+    app does not know, a bill row with no id, or a date that is not a
+    calendar date stops the list, carrying what was read before it. Two
+    bills of one date are both listed, and only that date is refused when
+    it is fetched (colliding_dates). Nothing from a row but its date and
+    the name of its type goes into what is said."""
+    if not ACCOUNT_RE.fullmatch(account or ""):
+        raise ListStopped("the billing history names no account number")
+    last4 = account[-4:]
     docs: List[RawDoc] = []
-    dates = set()
     for r in rows or []:
         if not isinstance(r, dict):
             raise ListStopped("a payment history row is not an object", docs)
-        if r.get("type") != "Bill":
+        kind = r.get("type")
+        if kind not in KNOWN_TYPES:
+            named = f" '{kind}'" if isinstance(kind, str) and _TYPE_WORD_RE.fullmatch(kind) else ""
+            raise ListStopped(f"a payment history row is of a type{named} this app does not know", docs)
+        if kind != BILL_TYPE:
             continue
         ref = r.get("encryptedBillId")
         if not isinstance(ref, str) or not ref.strip():
@@ -565,14 +652,22 @@ def bills_of(rows: list) -> List[RawDoc]:
         iso = bill_day(r.get("date"))
         if not iso:
             raise ListStopped("a bill's date is not a calendar date", docs)
-        if iso in dates:
-            raise ListStopped("two bills carry one date", docs)
-        dates.add(iso)
         title = f"Portland General Electric Bill {iso}"
         docs.append(RawDoc(title=title, date_text=iso, href=DOWNLOAD_PATH, text=title,
                            row_index=len(docs), kind="statement",
-                           document_id=f"bill-{iso}", bill_ref=ref.strip()))
+                           document_id=f"bill-{last4}-{iso}", bill_ref=ref.strip(),
+                           last4=last4))
     return docs
+
+
+def colliding_dates(docs: List[RawDoc]) -> List[str]:
+    """The dates carried by more than one bill of an account. Neither bill
+    of such a date is fetched, since nothing tells the two apart from one
+    answer to the next."""
+    seen, twice = set(), set()
+    for d in docs:
+        (twice if d.document_id in seen else seen).add(d.document_id)
+    return sorted({d.date_text for d in docs if d.document_id in twice})
 
 
 _ASK_JS = r"""async ([url, headers, body]) => {
@@ -592,7 +687,7 @@ _ASK_JS = r"""async ([url, headers, body]) => {
 def _ask_page(page, history: _History, offset: int) -> dict:
     """The history page at `offset`, asked from inside the signed-in page
     with the page's own query and headers, only the offset changed."""
-    body = json.loads(json.dumps(history.body))
+    body = copy.deepcopy(history.body)
     body["variables"]["paymentHistoryParams"]["pagingParams"]["offset"] = offset
     if not is_history_request("POST", GRAPHQL_URL, json.dumps(body)):
         raise ListStopped("refusing a history request that is not the page's own")
@@ -608,29 +703,60 @@ def _ask_page(page, history: _History, offset: int) -> dict:
     return got["data"]
 
 
+def _row_print(row) -> str:
+    """A row as it reads apart from its bill id, which is issued afresh
+    with every answer."""
+    if isinstance(row, dict):
+        row = {k: v for k, v in row.items() if k != "encryptedBillId"}
+    return json.dumps(row, sort_keys=True, default=str)
+
+
 def _all_bills(page, history: _History) -> List[RawDoc]:
     rows, total = history_page(history.answer)
     paging = history.body["variables"]["paymentHistoryParams"]["pagingParams"]
     limit = paging.get("limit")
     if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0:
         raise ListStopped("the page's own request has no page size")
+    account = history.account
+    # The walk starts where the page's own request did, at the first row.
+    if paging.get("offset", 0) != 0:
+        raise ListStopped("the page's own request does not start at the first row",
+                          _readable(rows, account))
     every = list(rows)
     pages = 1
     while len(every) < total:
         if pages >= MAX_PAGES:
-            raise ListStopped(f"the billing history ran past {MAX_PAGES} pages", bills_of(every))
-        more, again = history_page(_ask_page(page, history, len(every)))
+            raise ListStopped(f"the billing history ran past {MAX_PAGES} pages", _readable(every, account))
+        answer = _ask_page(page, history, len(every))
+        more, again = history_page(answer)
         if again != total:
-            raise ListStopped("the billing history's total changed while it was read", bills_of(every))
+            raise ListStopped("the billing history's total changed while it was read",
+                              _readable(every, account))
+        if account_of(answer) != account:
+            raise ListStopped("a billing history page was for another account", _readable(every, account))
         if not more:
             raise ListStopped(f"the billing history holds {total} rows and {len(every)} were given",
-                              bills_of(every))
+                              _readable(every, account))
+        # A row given again on a later page is paging that did not move on.
+        before = {_row_print(r) for r in every}
+        if any(_row_print(r) in before for r in more):
+            raise ListStopped("a billing history page gave a row an earlier page gave",
+                              _readable(every, account))
         every.extend(more)
         pages += 1
     if len(every) != total:
         raise ListStopped(f"the billing history holds {total} rows and {len(every)} were given",
-                          bills_of(every))
-    return bills_of(every)
+                          _readable(every, account))
+    return bills_of(every, account)
+
+
+def _readable(rows: list, account: str) -> List[RawDoc]:
+    """The bills of the rows read before the list stopped, as far as they
+    can be read."""
+    try:
+        return bills_of(rows, account)
+    except ListStopped as stop:
+        return stop.docs
 
 
 def goto_documents(page) -> bool:
@@ -669,16 +795,34 @@ def expand_all(page) -> None:
     return None
 
 
-def table_header(page) -> dict:
-    """For Diagnose. There is no bill table to read a header from."""
-    return {"cells": [], "statement_date_column": None}
+# The list as this run last read it, with the headers and bill ids it was
+# read with, so each bill is not a fresh walk of the whole history. In
+# memory for the run only.
+_RUN: dict = {}
+
+
+def _read(page) -> List[RawDoc]:
+    _RUN.clear()
+    history = _open(page)
+    bills = _all_bills(page, history)
+    _RUN.update(history=history, bills=bills)
+    return bills
 
 
 def collect_download_docs(page) -> List[RawDoc]:
-    """Every bill in the billing history, every page of it. Nothing is
-    pressed. A list that cannot be read whole raises ListStopped holding
-    what was read, and a signed-out session raises SessionExpired."""
-    return _all_bills(page, _open(page))
+    """Every bill in the billing history, every page of it, kept for this
+    run's downloads. Nothing is pressed. A list that cannot be read whole
+    raises ListStopped holding what was read, and a signed-out session
+    raises SessionExpired."""
+    return _read(page)
+
+
+def other_accounts() -> int:
+    """How many accounts besides the one read the sign-in holds, by the
+    page's own getAccountInfo, 0 when it holds one or did not say."""
+    history = _RUN.get("history")
+    held = history.accounts if history else None
+    return held - 1 if held and held > 1 else 0
 
 
 _PDF_JS = r"""async ([url, headers, body, limit]) => {
@@ -704,8 +848,9 @@ _PDF_JS = r"""async ([url, headers, body, limit]) => {
 def _fetch(page, history: _History, bill: RawDoc, out_path: Path, trace: Optional[list]) -> bool:
     """Ask the API for the bill's detailed PDF the way the page's own
     "Detailed Bill (PDF)" link does, from inside the page with its own
-    headers, and keep it only when the body is a PDF. A refusal or a JSON or
-    HTML body is the API saying the session has ended."""
+    headers, and keep it only when the body is a PDF. A 401, 403 or
+    redirect raises SessionExpired; any other answer that is not a PDF
+    fails this bill alone."""
     if not is_download_url(PDF_URL):
         return False
     body = {"encryptedBillId": bill.bill_ref, "isSummary": False, "isNonDetailed": False}
@@ -732,8 +877,6 @@ def _fetch(page, history: _History, bill: RawDoc, out_path: Path, trace: Optiona
     except Exception:
         return False
     if data[:5] != b"%PDF-":
-        if data.lstrip()[:1] in (b"<", b"{", b"["):
-            raise SessionExpired("the account API answered a bill with a sign-in body")
         return False
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_bytes(data)
@@ -743,30 +886,52 @@ def _fetch(page, history: _History, bill: RawDoc, out_path: Path, trace: Optiona
 def download_bill(page, dl_dir, iso_date: str, out_path, title: str = "",
                   trace: Optional[list] = None, href: str = "",
                   document_id: str = "") -> bool:
-    """Save the bill discovery recorded for `iso_date`. The billing history
-    is opened again, since the API's bill ids are issued afresh with each
-    answer, and the bill is fetched only when exactly one bill there carries
-    that date. `dl_dir` is unused: nothing goes through the browser's
-    downloads. Nothing is pressed. SessionExpired propagates to the run."""
+    """Save the bill discovery recorded as `document_id`, its account's last
+    four digits and its date. The list this run read is used when there is
+    one; it is read again when there is none, and once more when the bill
+    is not in it or its PDF is refused, since the API's bill ids and
+    authorization do not last. The bill is fetched only when the list is
+    for the account it was recorded under and exactly one bill there
+    carries its id. `dl_dir` is unused: nothing goes through the browser's
+    downloads. Nothing is pressed. SessionExpired from a list just read
+    propagates to the run."""
     out_path = Path(out_path)
-    if href != DOWNLOAD_PATH or not BILL_ID_RE.fullmatch(document_id or "") \
-            or document_id != f"bill-{iso_date}":
+    m = BILL_ID_RE.fullmatch(document_id or "")
+    if href != DOWNLOAD_PATH or not m or m.group(2) != iso_date:
         log.info("no bill was recorded for this document")
         if trace is not None:
             trace.append({"note": "no recorded bill"})
         return False
-    try:
-        history = _open(page)
-        found = [d for d in _all_bills(page, history) if d.date_text == iso_date]
-    except ListStopped as stop:
-        log.info("the bill list stopped while looking for the bill dated %s: %s", iso_date, stop)
-        return False
-    if len(found) != 1:
-        log.info("%d bills match the recorded date %s, none taken", len(found), iso_date)
-        if trace is not None:
-            trace.append({"note": "no single bill matches the record", "matches": len(found)})
-        return False
-    return _fetch(page, history, found[0], out_path, trace)
+    last4 = m.group(1)
+    why = ""
+    for fresh in ((False, True) if _RUN else (True,)):
+        if fresh:
+            try:
+                _read(page)
+            except ListStopped as stop:
+                log.info("the bill list stopped while looking for the bill dated %s: %s", iso_date, stop)
+                return False
+        history, bills = _RUN["history"], _RUN["bills"]
+        if history.account[-4:] != last4:
+            why = "the page shows another account than the one this bill was listed under"
+            continue
+        found = [d for d in bills if d.document_id == document_id]
+        if len(found) != 1:
+            why = f"{len(found)} bills carry this bill's date"
+            continue
+        try:
+            if _fetch(page, history, found[0], out_path, trace):
+                return True
+        except SessionExpired:
+            # A refusal of what this run read earlier may be its
+            # authorization running out, so the list is read again first.
+            if fresh:
+                raise
+        why = "the bill's PDF was refused"
+    log.info("the bill dated %s was not taken: %s", iso_date, why)
+    if trace is not None:
+        trace.append({"note": "not taken", "why": why})
+    return False
 
 
 # ---------------------------------------------------------------------------
