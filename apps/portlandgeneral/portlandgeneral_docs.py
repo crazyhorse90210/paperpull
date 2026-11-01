@@ -401,7 +401,7 @@ class App:
             print("Connected, but Billing & Payment History did not finish loading, so this cannot")
             print("say whether you are signed in. Look at the browser window and answer")
             print("anything portlandgeneral.com asks there yourself. If it shows your account, open")
-            print("Billing, then Billing & Payment History in it, then run --diagnose.")
+            print("Billing & Payment History in it, then run --diagnose.")
         self.close()
 
     def _in_scope(self, doc: Document) -> bool:
@@ -608,6 +608,11 @@ class App:
                 # bill after it would get the same answer, so the run stops
                 # here, with nothing recorded against this one.
                 self.session_ended()
+            except site.OtherAccountShown as e:
+                # The page shows another account. Every bill of the one
+                # this bill was listed under would meet the same, so the
+                # run stops once, with nothing recorded against this one.
+                self.account_not_shown(e)
             except Exception as e:
                 log.exception("Failed on %s", doc.key)
                 self._record(doc, State.FAILED, notes=str(e))
@@ -622,6 +627,18 @@ class App:
             "portlandgeneral.com answered as signed out, so this run stops here.",
             "Everything saved so far is kept. Sign in again in the open browser",
             "window, then run Resume to carry on from where this stopped.",
+        ])
+
+    def account_not_shown(self, shown: "site.OtherAccountShown") -> None:
+        """Stop the run because the page shows another account than the one
+        the next bill was listed under. Progress is saved and nothing is
+        recorded for review (tabs.stop)."""
+        tabs.stop(self, [
+            f"portlandgeneral.com shows the account ending {shown.shown}, and the next bill",
+            f"was listed under the account ending {shown.wanted}, so this run stops here.",
+            "Everything saved so far is kept. Choose the account ending "
+            f"{shown.wanted} on portlandgeneral.com,",
+            "then run Resume to carry on from where this stopped.",
         ])
 
     def download_one(self, page, doc: Document, filename: str):
@@ -983,6 +1000,9 @@ class App:
             info["documents_recognized"] = [{"date": b.date_text, "kind": b.kind, "has_id": bool(b.document_id)}
                                             for b in found_docs[:40]]
             info["other_accounts"] = site.other_accounts()
+            # Other accounts are counted from getAccountInfo; when the page
+            # was never seen asking it, the count above says nothing.
+            info["account_info_seen"] = site.account_info_seen() if found else False
             docs = site.collect_documents(page)
             info["rows_collected"] = len(docs)
             info["samples"] = []

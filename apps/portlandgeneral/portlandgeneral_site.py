@@ -158,10 +158,11 @@ SECURITY_CHALLENGE_MARKERS = [
     "access denied",
 ]
 
-# What a signed-in page can still say when the session is over. A signed-in
-# page is otherwise not read for the markers above: Account Summary invites
-# the account holder to turn on "Two-Step Authentication" (seen 2026-10-30).
-SESSION_OVER_MARKERS = ["your session has expired", "log back in", "access denied"]
+# Account Summary invites the account holder to turn on "Two-Step
+# Authentication" (seen 2026-10-30). On a signed-in page those are the
+# banner's words and are passed over; every other marker is read there as
+# on any page, so a code or CAPTCHA prompt still stops the run.
+BANNER_MARKERS = ("two-step", "authenticator")
 SIGN_OUT_RE = re.compile(r"^\s*sign\s*out\s*$", re.I)
 
 RATE_LIMIT_MARKERS = [
@@ -279,14 +280,16 @@ def _signed_in_here(page) -> bool:
 def detect_security_challenge(page) -> Optional[str]:
     """Names the passcode, CAPTCHA or throttling prompt on screen, or None.
     Visible text only. A page that shows a bill row is not a challenge,
-    whatever its text says further down, and a signed-in page is read only
-    for a session that is over or throttling."""
+    whatever its text says further down, and a signed-in page is read for
+    every marker but the Two-Step banner's own words."""
     try:
         if page.get_by_role("link", name=BILL_CONTROL_RE).count() > 0:
             return None
     except Exception:
         pass
-    markers = SESSION_OVER_MARKERS if _signed_in_here(page) else SECURITY_CHALLENGE_MARKERS
+    markers = SECURITY_CHALLENGE_MARKERS
+    if _signed_in_here(page):
+        markers = [m for m in markers if m not in BANNER_MARKERS]
     try:
         title = (page.title() or "").lower()
     except Exception:
@@ -339,6 +342,8 @@ _ISO_DAY_RE = re.compile(r"([0-9]{4})-([0-9]{2})-([0-9]{2})(?:T.*)?")
 # The page asks for fifteen rows at a time. A history this many pages long
 # is not a billing history, so the walk stops rather than run on.
 MAX_PAGES = 60
+# How long getAccountInfo is waited for once the list has come.
+ACCOUNT_INFO_WAIT_MS = 3000
 MAX_LIST_BYTES = 5 * 1024 * 1024
 MAX_PDF_BYTES = 25 * 1024 * 1024
 # The only request headers taken from the page's own call. The values live
@@ -381,6 +386,16 @@ class RawDoc:
     last4: str = ""
 
 
+class OtherAccountShown(Exception):
+    """The page shows another account than the one a bill was listed under.
+    Every bill of that account would meet the same, so the run stops once,
+    naming the last four digits of the account it wants."""
+
+    def __init__(self, wanted: str, shown: str):
+        super().__init__(f"the page shows the account ending {shown}, and the bill is of the one ending {wanted}")
+        self.wanted, self.shown = wanted, shown
+
+
 class ListStopped(Exception):
     """The list has a part this could not read, so what was read is not all
     of it. `docs` holds what was read before it stopped."""
@@ -394,12 +409,14 @@ class ListStopped(Exception):
 class _History:
     """The page's own history request, what the API answered to it, the
     account it is for, and how many accounts the sign-in holds when the
-    page asked (None when it did not)."""
+    page asked (None when it did not or the answer could not be read), and
+    whether the page was seen asking."""
     body: dict
     headers: dict
     answer: dict
     account: str = ""
     accounts: Optional[int] = None
+    info_seen: bool = False
 
 
 def _query_body(method: str, url: str, post_data: Optional[str], operation: str) -> Optional[dict]:
@@ -477,6 +494,12 @@ def _open(page, timeout_ms: int = 45000) -> _History:
         while not got and waited < timeout_ms:
             page.wait_for_timeout(250)
             waited += 250
+        # getAccountInfo may come after the list, so it is given a moment
+        # more; without it Discover cannot say whether there are others.
+        waited = 0
+        while got and not info and waited < ACCOUNT_INFO_WAIT_MS:
+            page.wait_for_timeout(250)
+            waited += 250
     finally:
         try:
             page.remove_listener("response", seen)
@@ -508,7 +531,7 @@ def _open(page, timeout_ms: int = 45000) -> _History:
     _keep_private(answer)
     history_page(answer)
     return _History(body=body, headers=headers, answer=answer, account=account_of(answer),
-                    accounts=_accounts_held(info[0] if info else None))
+                    accounts=_accounts_held(info[0] if info else None), info_seen=bool(info))
 
 
 def _accounts_held(resp) -> Optional[int]:
@@ -825,6 +848,13 @@ def other_accounts() -> int:
     return held - 1 if held and held > 1 else 0
 
 
+def account_info_seen() -> bool:
+    """Whether the page was seen asking getAccountInfo when the list was
+    last read, for Diagnose."""
+    history = _RUN.get("history")
+    return bool(history and history.info_seen)
+
+
 _PDF_JS = r"""async ([url, headers, body, limit]) => {
   let r;
   try {
@@ -890,11 +920,12 @@ def download_bill(page, dl_dir, iso_date: str, out_path, title: str = "",
     four digits and its date. The list this run read is used when there is
     one; it is read again when there is none, and once more when the bill
     is not in it or its PDF is refused, since the API's bill ids and
-    authorization do not last. The bill is fetched only when the list is
-    for the account it was recorded under and exactly one bill there
-    carries its id. `dl_dir` is unused: nothing goes through the browser's
-    downloads. Nothing is pressed. SessionExpired from a list just read
-    propagates to the run."""
+    authorization do not last. The bill is fetched only when exactly one
+    bill there carries its id. A list for another account than the one
+    the bill was recorded under raises OtherAccountShown, with no reread,
+    since the account shown is the person's choice on the site. `dl_dir`
+    is unused: nothing goes through the browser's downloads. Nothing is
+    pressed. SessionExpired from a list just read propagates to the run."""
     out_path = Path(out_path)
     m = BILL_ID_RE.fullmatch(document_id or "")
     if href != DOWNLOAD_PATH or not m or m.group(2) != iso_date:
@@ -913,8 +944,7 @@ def download_bill(page, dl_dir, iso_date: str, out_path, title: str = "",
                 return False
         history, bills = _RUN["history"], _RUN["bills"]
         if history.account[-4:] != last4:
-            why = "the page shows another account than the one this bill was listed under"
-            continue
+            raise OtherAccountShown(last4, history.account[-4:])
         found = [d for d in bills if d.document_id == document_id]
         if len(found) != 1:
             why = f"{len(found)} bills carry this bill's date"

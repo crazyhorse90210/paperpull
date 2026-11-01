@@ -47,7 +47,11 @@ PAGE_SIZE = 2
 HISTORY = [("Bill", "2026-09-30"), ("Payment", "2026-09-20"), ("Bill", "2026-08-31"),
            ("Payment", "2026-08-20"), ("Bill", "2026-07-31")]
 BILL_DATES = [day for kind, day in HISTORY if kind == "Bill"]
-PDFS = {day: testkit.text_pdf([f"Portland General Electric test bill {day}"]) for day in BILL_DATES}
+# One bill of about 100 KB, so the PDF script builds its base64 from more
+# than one 32 KB piece.
+PDFS = {day: testkit.text_pdf([f"Portland General Electric test bill {day}"],
+                              min_bytes=100_000 if day == BILL_DATES[0] else 4000)
+        for day in BILL_DATES}
 
 # The page asks what the live page asks on load, from its own script.
 BILLING_HISTORY = """<!doctype html><html><head><title>Billing & Payment History</title></head>
@@ -60,14 +64,17 @@ function ask(body) {
   return fetch(api + "/pge-graphql", {method: "POST", headers: headers, body: JSON.stringify(body)})
     .then(r => r.json());
 }
-ask({operationName: "getAccountInfo", variables: {params: {}},
-     query: "query getAccountInfo($params: AccountInfoParams) { getAccountInfo { accountMeta { totalAccounts } } }"})
-  .then(() => ask({operationName: "getAccountDetails",
+const info = () => ask({operationName: "getAccountInfo", variables: {params: {}},
+     query: "query getAccountInfo($params: AccountInfoParams) { getAccountInfo { accountMeta { totalAccounts } } }"});
+const details = () => ask({operationName: "getAccountDetails",
                    variables: {params: {accountNumberList: [{accountNumber: %(account)s}]},
                                paymentHistoryParams: {pagingParams: {limit: %(size)d, offset: 0}}},
-                   query: "query getAccountDetails($params: AccountDetailParams) { getAccountDetails { x } }"}))
+                   query: "query getAccountDetails($params: AccountDetailParams) { getAccountDetails { x } }"})
   .then(a => { document.getElementById("rows").textContent =
                  a.data.getAccountDetails[0].paymentHistory.paymentHistoryDetails.length + " rows"; });
+// The live page's order is not known, so either is tried.
+if (%(info_first)s) { info().then(details); }
+else { details().then(() => new Promise(r => setTimeout(r, 800))).then(info); }
 </script></body></html>"""
 
 
@@ -84,6 +91,11 @@ class FakePge:
         # A row type the history holds besides Bill and Payment, if any.
         self.extra_type = ""
         self.accounts = 1
+        # Whether the page asks getAccountInfo before its list.
+        self.info_first = True
+        # What the API answers with a redirect to the sign-in page: "list"
+        # for a page of the list the app asks, "pdf" for a bill.
+        self.redirect = ""
 
 
 SITE = FakePge()
@@ -118,6 +130,15 @@ class _Handler(BaseHTTPRequestHandler):
     def _json(self, status, value):
         self._send(status, json.dumps(value).encode(), "application/json", cors=True)
 
+    def _to_sign_in(self):
+        """A 302 to the site's sign-in page, the way a signed-out session
+        shows up."""
+        self.send_response(302)
+        self.send_header("Location", "http://%s:%d/auth/sign-in" % (PAGE_HOST, self.server.server_address[1]))
+        self.send_header("Content-Length", "0")
+        self.send_header("Access-Control-Allow-Origin", self.headers.get("Origin") or "*")
+        self.end_headers()
+
     def _host(self):
         return (self.headers.get("Host") or "").split(":")[0]
 
@@ -126,8 +147,12 @@ class _Handler(BaseHTTPRequestHandler):
         SITE.seen.append(("GET", self._host(), path))
         if self._host() == PAGE_HOST and path == site.DOCUMENTS_PATH:
             html = BILLING_HISTORY % {"api": json.dumps(site.API), "token": json.dumps(TOKEN),
-                                      "account": json.dumps(ACCOUNT), "size": PAGE_SIZE}
+                                      "account": json.dumps(ACCOUNT), "size": PAGE_SIZE,
+                                      "info_first": json.dumps(SITE.info_first)}
             self._send(200, html.encode(), "text/html; charset=utf-8")
+        elif self._host() == PAGE_HOST and path == "/auth/sign-in":
+            self._send(200, b"<!doctype html><title>Sign In</title><input type=password>",
+                       "text/html; charset=utf-8")
         else:
             self.send_error(404)
 
@@ -148,6 +173,8 @@ class _Handler(BaseHTTPRequestHandler):
                 "totalAccounts": SITE.accounts, "hasInactiveAccounts": False}}}})
         if path == "/pge-graphql" and body.get("operationName") == "getAccountDetails":
             paging = body["variables"]["paymentHistoryParams"]["pagingParams"]
+            if SITE.redirect == "list" and paging["offset"] > 0:
+                return self._to_sign_in()
             history = HISTORY + ([(SITE.extra_type, "2026-07-15")] if SITE.extra_type else [])
             SITE.answers += 1
             rows = [_row(n, kind, day) for n, (kind, day)
@@ -157,6 +184,8 @@ class _Handler(BaseHTTPRequestHandler):
                 "paymentHistory": {"paymentHistoryDetails": rows,
                                    "totalDetailsRecords": len(history)}}]}})
         if path == "/pge-bill-api/pdf/bills":
+            if SITE.redirect == "pdf":
+                return self._to_sign_in()
             day = SITE.issued.get(body.get("encryptedBillId"))
             if not day or body.get("isSummary") is not False or body.get("isNonDetailed") is not False:
                 return self._json(400, {"message": "no such bill"})
@@ -322,3 +351,30 @@ def test_discover_says_when_the_sign_in_holds_other_accounts(attached, server, t
     assert ended[1] in (0, None), folded(out)
     assert "holds 2 other account(s)" in folded(out), folded(out)
     assert discovered(tmp_path) == LISTED
+
+
+def test_account_info_asked_after_the_list_is_still_heard(attached, server, tmp_path, capsys):
+    """The page asks getAccountInfo only once its list has come."""
+    SITE.accounts, SITE.info_first = 3, False
+    their_tab(attached, server)
+
+    ended, out = run(tmp_path, attached, capsys, "--discover")
+
+    assert ended[1] in (0, None), folded(out)
+    assert "holds 2 other account(s)" in folded(out), folded(out)
+
+
+@pytest.mark.parametrize("where", ["list", "pdf"])
+def test_a_redirect_to_sign_in_stops_the_run_as_signed_out(attached, server, tmp_path, capsys, where):
+    """The API answers a page of the list, or a bill, with a redirect to
+    the sign-in page. The run stops as signed out, saving nothing and
+    sending nothing to Manual Review."""
+    SITE.redirect = where
+    their_tab(attached, server)
+
+    ended, out = run(tmp_path, attached, capsys, "--all", "--yes")
+
+    assert "answered as signed out" in folded(out), folded(out)
+    assert "stopped partway" not in out and "manual review" not in out.lower(), folded(out)
+    assert not list((tmp_path / "out").rglob("*.pdf")), folded(out)
+    assert not any(s == ("GET", PAGE_HOST, "/auth/sign-in") for s in SITE.seen), SITE.seen

@@ -33,9 +33,9 @@ another site is never used.
 - **Whole or stopped.** The walk must start at the first row, every page
   must be for the same account and give the same total, no page may give
   a row an earlier page gave, and the rows read must come to the total.
-  Rows are bills or payments. A row of any other type stops the list and
-  is named in the failure file, so a rebill or a new type is never passed
-  over.
+  Rows are bills or payments. A row of any other type stops the list,
+  and the run names its type in what it prints, so a rebill or a new type
+  is never passed over. The failure file says the list stopped partway.
 - **Identity.** The API issues every bill id afresh with each answer, so a
   bill is known by its account's last four digits and its date,
   `bill-1234-2026-09-30`. Two bills of one account and date are both
@@ -45,8 +45,11 @@ another site is never used.
   false, asked from inside the page, and kept only when it is a PDF.
 - **Once a run.** The list is read once and kept in memory with its bill
   ids. It is read again only when a bill's PDF is refused or the bill is
-  not in it, and a bill is fetched only when that list is for the account
-  it was recorded under.
+  not in it.
+- **One account at a time.** A bill is fetched only when the page shows
+  the account it was listed under. When it shows another, the run stops
+  and names the last four digits of the account it wants. Choose that
+  account on the site and run Resume.
 - **Signing out.** A 401, a 403 or a redirect on a list just read stops
   the run and keeps what it saved. Sign in again and run Resume. Any other
   answer that is not a PDF fails that one bill.
@@ -60,8 +63,16 @@ link gives. Not yet seen:
 
 - More than one account on one sign-in. Only the account the page shows
   is read, and the run says how many others the sign-in holds, from the
-  page's own `getAccountInfo` answer. Choose another account on the site
-  and run Discover again to list its bills.
+  page's own `getAccountInfo` answer. Take one account's bills (Discover,
+  then Run All), then choose the next account on the site and do the same.
+  Diagnose says whether the page was seen asking `getAccountInfo`.
+- Two accounts on one sign-in whose numbers end in the same four digits.
+  Their bills share keys, so with bills on the same dates one account's
+  PDF could be saved under the other's record. For two accounts that is
+  about 1 in 10,000.
+- Two payments of one date and amount on either side of a page break.
+  They read as a row given twice and stop the list, until newer rows move
+  the break.
 - A history with no bills.
 - Two bills on one date, a rebill, or a row type other than Bill and
   Payment.

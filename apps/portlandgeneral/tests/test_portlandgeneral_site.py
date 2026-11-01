@@ -106,9 +106,12 @@ class Page:
     page's own request, further pages and PDFs are asked through evaluate."""
 
     def __init__(self, rows=ROWS, limit=2, settled=None, first=None, pdf=PDF, pdf_status=200,
-                 pages=None, headers=None, accounts=None, number=FAKE_ACCOUNT, pdfs=None):
+                 pages=None, headers=None, accounts=None, number=FAKE_ACCOUNT, pdfs=None,
+                 info_late=0):
         self.rows, self.limit = rows, limit
         self.accounts, self.number = accounts, number
+        # getAccountInfo answered only after this many waits, past the list.
+        self.info_late, self.waits = info_late, 0
         # The PDF answers in turn, when they differ from one ask to the next.
         self.pdfs = pdfs
         self.opened = 0
@@ -129,12 +132,16 @@ class Page:
         self.handlers.remove(handler)
 
     def wait_for_timeout(self, ms):
-        pass
+        self.waits += 1
+        if self.accounts is not None and self.info_late and self.waits == self.info_late:
+            for h in list(self.handlers):
+                h(Resp(info_answer(self.accounts), body=info_body()))
 
     def goto(self, url, **k):
         self.url = self.settled
         self.opened += 1
-        if self.accounts is not None:
+        self.waits = 0
+        if self.accounts is not None and not self.info_late:
             for h in list(self.handlers):
                 h(Resp(info_answer(self.accounts), body=info_body()))
         resp = self.first if self.first is not None else Resp(
@@ -233,6 +240,11 @@ class Challenge(unittest.TestCase):
                      self.Shown("https://portlandgeneral.com/secure/account/summary",
                                 "Sign out\nYour session has expired.")):
             self.assertIsNotNone(site.detect_security_challenge(page), page.url)
+
+    def test_a_prompt_on_a_signed_in_page_still_stops_beside_the_banner(self):
+        for prompt in ("Enter the code we sent", "Are you a robot?", "Let's verify it's you"):
+            page = self.Shown(site.DOCUMENTS_URL, self.BANNER + "\n" + prompt)
+            self.assertIsNotNone(site.detect_security_challenge(page), prompt)
 
 
 class HistoryRequest(unittest.TestCase):
@@ -355,6 +367,12 @@ class ListWhole(unittest.TestCase):
         for accounts, others in ((None, 0), (1, 0), (3, 2)):
             site.collect_download_docs(Page(accounts=accounts))
             self.assertEqual(site.other_accounts(), others, accounts)
+            self.assertEqual(site.account_info_seen(), accounts is not None, accounts)
+
+    def test_account_info_answered_after_the_list_is_still_read(self):
+        site.collect_download_docs(Page(accounts=3, info_late=4))
+        self.assertEqual(site.other_accounts(), 2)
+        self.assertTrue(site.account_info_seen())
 
     def test_a_refused_page_is_session_expired(self):
         page = Page(limit=2, pages=[{"status": 401}])
@@ -427,14 +445,20 @@ class Download(unittest.TestCase):
         self.assertFalse(any(u == site.PDF_URL for u, _, _ in page.asked))
         self.assertFalse(self.out.exists())
 
-    def test_a_bill_of_another_account_is_never_fetched(self):
+    def test_a_bill_of_another_account_stops_without_reading_again(self):
         # Discover listed account ...0012; the page now shows ...0034, which
         # has a bill of the same date.
-        page = Page(limit=10, number=OTHER_ACCOUNT)
-        site.collect_download_docs(page)
-        self.assertFalse(fetch(page, self.out))
-        self.assertFalse(any(u == site.PDF_URL for u, _, _ in page.asked))
-        self.assertFalse(self.out.exists())
+        for cached in (True, False):
+            site._RUN.clear()
+            page = Page(limit=10, number=OTHER_ACCOUNT)
+            if cached:
+                site.collect_download_docs(page)
+            with self.assertRaises(site.OtherAccountShown) as raised:
+                fetch(page, self.out)
+            self.assertEqual((raised.exception.wanted, raised.exception.shown), ("0012", "0034"))
+            self.assertEqual(page.opened, 1, cached)
+            self.assertFalse(any(u == site.PDF_URL for u, _, _ in page.asked))
+            self.assertFalse(self.out.exists())
 
     def test_a_date_two_bills_carry_is_refused_and_the_rest_are_taken(self):
         page = Page(rows=ROWS + [bill("2026-08-31", "again")], limit=10)
@@ -518,6 +542,24 @@ class Orchestrator(unittest.TestCase):
         finally:
             site.download_bill = original
         self.assertIn("signed out", said.getvalue())
+        self.assertEqual(app.progress.data, {})
+        self.assertEqual(app.stats["manual_review"] + app.stats["failed"], 0)
+
+    def test_another_account_shown_stops_the_run_once_and_records_nothing(self):
+        app = make_app(self.tmp, "--all")
+        for r in site.bills_of(ROWS, FAKE_ACCOUNT):
+            app._record_rawdoc(r, site.BILLING_URL)
+        app.check_session = lambda page: None
+        app._on_its_site = lambda: Page(limit=10, number=OTHER_ACCOUNT)
+        app._delay = lambda *a, **k: None
+        site._RUN.clear()
+        with redirect_stdout(io.StringIO()) as said, self.assertRaises(SystemExit) as ended:
+            app.process(app._select())
+        self.assertEqual(ended.exception.code, 0)
+        text = " ".join(said.getvalue().split())
+        self.assertIn("shows the account ending 0034", text)
+        self.assertIn("Choose the account ending 0012", text)
+        self.assertIn("run Resume", text)
         self.assertEqual(app.progress.data, {})
         self.assertEqual(app.stats["manual_review"] + app.stats["failed"], 0)
 
