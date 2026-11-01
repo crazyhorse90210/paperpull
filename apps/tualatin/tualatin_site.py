@@ -1,29 +1,36 @@
 """ALL tualatin.merchanttransact.com selectors, URLs, and page behavior live here.
 
-When the City of Tualatin's billing portal changes, repair this file only.
+When Tualatin Water's billing portal, CivicPay Online, changes, repair
+this file only.
 
 STATUS: built 2026-10-29 from a signed-in survey of a real account, with
 nothing pressed by the app.
 
 SEEN SIGNED IN, 2026-10-29 (shapes only, no values kept):
 
-  * The City of Tualatin's utility bills (water, sewer, stormwater, parks
-    and road fees) are on CivicPay Online at
+  * Tualatin Water's utility bills (water, sewer, stormwater, parks and
+    road fees) are on CivicPay Online at
     https://tualatin.merchanttransact.com/. Its session is a cookie, so a
     page is opened by its address.
   * /secure/Activity draws one table headed Transaction Date | Transaction
     Type | Description | Amount | Balance, a row per transaction, Billing
-    and Payment alike (48 rows seen, 24 bills). A Billing row links to its
-    bill, /secure/MyBill/<bill number>.
+    and Payment alike (48 rows seen, 24 bills, no pager or count). A
+    Billing row links to its bill, /secure/MyBill/<bill number>.
   * A bill's Print My Bill link, /secure/MyBill/<bill number>/Print, is an
     HTML page, not a PDF: the printed bill, with Bill Details, Billing Date,
-    Due Date, the charges, Total Amount Due and the meter readings.
+    Due Date, the charges, Total Amount Due and the meter readings. It
+    carries no bill number in its text; its Billing Date was each bill's
+    Transaction Date on Activity.
   * So a run reads Activity, fetches each bill's print page from inside the
     signed-in page with its stylesheets and images from the portal host
     written into it, and draws it as a PDF with every script, frame and
     form taken out, offline (paperpull_core.receipt_pdf.print_html_inert_to_pdf).
     Drawn without its stylesheet, the page lost the look of the bill. Nothing
     is clicked. A bill is known by its bill number.
+  * What is written into the page counts against one budget: the page,
+    each stylesheet as written in and each image as its data address.
+    Each answer is read through the core's bounded reader, and one that
+    does not fit is left out and noted in the trace.
 
 Sign-in is the account holder's own, in the browser.
 
@@ -39,14 +46,13 @@ SAFETY (a payment portal that can pay, schedule and enroll):
 from __future__ import annotations
 
 import logging
-import json
 import re
 import sys
 from dataclasses import dataclass
 from datetime import date as _date
 from pathlib import Path
 from typing import List, Optional, Tuple
-from urllib.parse import parse_qs, urlencode, urlsplit
+from urllib.parse import urlsplit
 
 from paperpull_core import intake
 from paperpull_core.controls import SETTINGS_CONTROL_RE, AUTH_CONTROL_RE
@@ -205,36 +211,14 @@ def parse_period_date(text: str) -> Tuple[Optional[str], str]:
     return None, ""
 
 
-# A bill row's statement date, exactly as the table writes it: "Sep 12, 2026".
-_DUE_DATE_RE = _STATEMENT_DATE_RE = re.compile(
-    r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+([0-9]{1,2}),\s+([0-9]{4})")
-# The words that head the column that date is read from. A header holding
-# both, as "Statement Date" or "Statement Date *" does, and "Due Date" does
-# not, since the live header has only been named, never seen whole.
-STATEMENT_HEAD_WORDS = frozenset({"statement", "date"})
-
-
-def statement_date(text) -> Optional[str]:
-    """A bill row's statement date as YYYY-MM-DD, or None. The whole cell
-    must be the date and the day must exist; nothing is found inside other
-    text."""
-    m = _STATEMENT_DATE_RE.fullmatch(re.sub(r"\s+", " ", str(text or "")).strip())
-    if not m:
-        return None
-    try:
-        return _date(int(m.group(3)), _MONTHS[m.group(1).lower()], int(m.group(2))).isoformat()
-    except ValueError:
-        return None
-
-
 # ---------------------------------------------------------------------------
 # Session / safety
 # ---------------------------------------------------------------------------
 
 class SessionExpired(Exception):
-    """tualatin.merchanttransact.com answered as a signed-out session: its sign-in page,
-    a redirect where a bill was asked for, a 401, or an HTML or JSON body
-    where a PDF was expected. The run stops for the account holder."""
+    """CivicPay Online answered as a signed-out session: its sign-in page,
+    a redirect where a bill was asked for, a 401 or 403, or a print page
+    asking for a password. The run stops for the account holder."""
 
 
 def looks_signed_out(page) -> bool:
@@ -300,8 +284,16 @@ BILL_NUMBER_RE = re.compile(r"[0-9]{5,12}")
 _BILL_PATH_RE = re.compile(r"/secure/MyBill/([0-9]{5,12})")
 _PRINT_PATH_RE = re.compile(r"/secure/MyBill/([0-9]{5,12})/Print")
 _ROW_DATE_RE = re.compile(r"([0-9]{1,2})/([0-9]{1,2})/([0-9]{4})")
-# Words every printed bill carries, read before the page is drawn as a PDF.
+# Words every printed bill carries, read off the page as fetched, before
+# anything is written into it.
 PRINT_MARKERS = ("Bill Details", "Billing Date", "Total Amount Due")
+_BILLING_DATE_RE = re.compile(r"Billing Date\s*:?\s*([0-9]{1,2})/([0-9]{1,2})/([0-9]{4})", re.I)
+# The row types Activity holds. A bill is a document and a payment is not;
+# any other type stops the list, so an adjustment or a final bill under a
+# type of its own is named in a failure file rather than passed over.
+BILL_TYPE = "Billing"
+KNOWN_TYPES = frozenset({BILL_TYPE, "Payment"})
+_TYPE_WORD_RE = re.compile(r"[A-Za-z][A-Za-z /]{0,29}")
 MAX_PAGE_BYTES = 5 * 1024 * 1024
 
 
@@ -375,8 +367,37 @@ _ROWS_JS = r"""() => {
     cells: [...tr.cells].map(text),
     bills: [...tr.querySelectorAll('a[href]')].map(a => a.getAttribute('href')).filter(h => /\/secure\/MyBill\//.test(h))
   }));
-  return {table: true, heads: heads, rows: rows, account: account};
+  // What would say the table is not every transaction: a pager offering
+  // another page, a count of its own, a date filter, or a choice of
+  // accounts.
+  const off = (el) => el.hasAttribute('disabled') || el.getAttribute('aria-disabled') === 'true'
+    || /\bdisabled\b/.test(el.className || '') || /\bdisabled\b/.test((el.parentElement || {}).className || '');
+  let pager = false;
+  for (const box of document.querySelectorAll('.pagination, .pager, .dataTables_paginate, [class*="paginat"], nav[aria-label*="pag" i]')) {
+    for (const el of box.querySelectorAll('a, button')) {
+      const t = text(el);
+      if (!off(el) && (/^(next|more|>|›|»|>>)$/i.test(t) || (/^[0-9]+$/.test(t) && +t > 1))) pager = true;
+    }
+  }
+  const all = text(document.body);
+  let count = null, m;
+  if ((m = all.match(/showing\s+([0-9]+)\s*(?:to|-|–)\s*([0-9]+)\s+of\s+([0-9]+)/i))) count = +m[3];
+  if ((m = all.match(/\bpage\s+([0-9]+)\s+of\s+([0-9]+)/i)) && +m[2] > 1) pager = true;
+  const named = (el) => [el.name, el.id, el.getAttribute('aria-label'), el.getAttribute('placeholder'),
+                         ...[...(el.labels || [])].map(text)].join(' ');
+  const fields = [...document.querySelectorAll('input, select')].filter(el => el.type !== 'hidden');
+  const dated = fields.some(el => el.type === 'date' || el.type === 'month'
+    || /\b(date|from|to|start|end|period|range|year|month|days)\b/i.test(named(el).replace(/([a-z])([A-Z])/g, '$1 $2')));
+  const accounts = fields.filter(el => el.tagName === 'SELECT' && /account/i.test(named(el)))
+    .reduce((n, el) => Math.max(n, el.options.length), 0);
+  return {table: true, heads: heads, rows: rows, account: account, pager: pager, count: count,
+          dated: dated, accounts: accounts};
 }"""
+
+# Whether the Activity table itself has drawn its rows, not any table.
+_TABLE_DRAWN_JS = r"""() => [...document.querySelectorAll('table')].some(t =>
+  [...t.querySelectorAll('th')].some(th => /^\s*transaction date\s*$/i.test(th.textContent || ''))
+  && t.querySelector('tbody tr'))"""
 
 
 def _open(page, timeout_ms: int = 30000) -> dict:
@@ -393,7 +414,7 @@ def _open(page, timeout_ms: int = 30000) -> dict:
     if not _settled_here(page):
         raise SessionExpired("the payment portal sent Activity somewhere else")
     try:
-        page.wait_for_selector("table tbody tr", timeout=timeout_ms)
+        page.wait_for_function(_TABLE_DRAWN_JS, timeout=timeout_ms)
     except Exception:
         if looks_signed_out(page):
             raise SessionExpired("the payment portal showed its sign-in page")
@@ -406,6 +427,22 @@ def _open(page, timeout_ms: int = 30000) -> dict:
         raise ListStopped("Activity shows no transaction table")
     _keep_private(seen.get("account"))
     return seen
+
+
+def _whole(seen: dict) -> None:
+    """Stop the list when Activity shows anything saying its table is not
+    every transaction. None of it was seen on 2026-10-29."""
+    if seen.get("pager"):
+        raise ListStopped("Activity shows a pager, and this app reads one page")
+    if seen.get("dated"):
+        raise ListStopped("Activity shows a date filter, so its table may not hold every transaction")
+    accounts = seen.get("accounts")
+    if isinstance(accounts, int) and accounts > 1:
+        raise ListStopped("Activity offers a choice of accounts, and this app reads one")
+    count = seen.get("count")
+    drawn = sum(1 for r in seen.get("rows") or [] if any((r or {}).get("cells") or []))
+    if isinstance(count, int) and not isinstance(count, bool) and count != drawn:
+        raise ListStopped(f"Activity says it holds {count} transactions and {drawn} were read")
 
 
 def _keep_private(words) -> None:
@@ -434,11 +471,12 @@ def row_day(text) -> Optional[str]:
 
 def bills_of(heads: list, rows: list) -> List[RawDoc]:
     """RawDocs from the Activity rows of type Billing, one per bill number,
-    dated by the row's Transaction Date. Payments are passed over. A header
-    with no single Transaction Date or Transaction Type column, a Billing
-    row with no single bill link, a link that is not a bill's, a date that
-    is not a calendar date, or one bill number twice stops the list,
-    carrying what was read before it."""
+    dated by the row's Transaction Date. Payments are passed over. A row of
+    a type this app does not know, a header with no single Transaction
+    Date or Transaction Type column, a Billing row with no single bill
+    link, a link that is not a bill's, a date that is not a calendar date,
+    or one bill number twice stops the list, carrying what was read before
+    it. Nothing from a row but its date and the name of its type is said."""
     docs: List[RawDoc] = []
     heads = [str(h or "").strip().lower() for h in heads or []]
     if heads.count("transaction date") != 1 or heads.count("transaction type") != 1:
@@ -451,7 +489,11 @@ def bills_of(heads: list, rows: list) -> List[RawDoc]:
             if not any(cells):
                 continue
             raise ListStopped("an Activity row does not line up with the header", docs)
-        if cells[at_type] != "Billing":
+        kind = cells[at_type]
+        if kind not in KNOWN_TYPES:
+            named = f" '{kind}'" if _TYPE_WORD_RE.fullmatch(kind or "") else ""
+            raise ListStopped(f"an Activity row is of a type{named} this app does not know", docs)
+        if kind != BILL_TYPE:
             continue
         if len(links) != 1:
             raise ListStopped("a Billing row carries no single bill link", docs)
@@ -507,93 +549,150 @@ def expand_all(page) -> None:
     return None
 
 
-def table_header(page) -> dict:
-    """For Diagnose, the Activity table's header cells as read."""
+def table_facts(page) -> dict:
+    """For Diagnose: the Activity table's header as read, its rows, and
+    whether it shows a pager, a count, a date filter or a choice of
+    accounts."""
     try:
         seen = page.evaluate(_ROWS_JS) or {}
     except Exception:
         seen = {}
-    heads = [str(h or "") for h in seen.get("heads") or []]
-    return {"cells": heads, "statement_date_column": heads.index("Transaction Date") if "Transaction Date" in heads else None}
+    return {"heads": [str(h or "") for h in seen.get("heads") or []][:12],
+            "rows": len(seen.get("rows") or []), "pager": bool(seen.get("pager")),
+            "count": seen.get("count"), "date_filter": bool(seen.get("dated")),
+            "account_choices": seen.get("accounts") or 0}
+
+
+def _bills(seen: dict) -> List[RawDoc]:
+    _whole(seen)
+    docs = bills_of(seen.get("heads"), seen.get("rows"))
+    # An Activity with no bills has not been seen, and a table that lost
+    # its rows would look just like one.
+    if not docs:
+        raise ListStopped("Activity shows no bills, and an Activity without any has not been seen, "
+                          "so this stops rather than call it complete")
+    return docs
 
 
 def collect_download_docs(page) -> List[RawDoc]:
     """Every bill on Activity. Nothing is pressed. A list that cannot be
     read whole raises ListStopped holding what was read, and a signed-out
     portal raises SessionExpired."""
-    seen = _open(page)
-    return bills_of(seen.get("heads"), seen.get("rows"))
+    return _bills(_open(page))
 
 
-_PRINT_JS = r"""async ([url, host, limit]) => {
+_PRINT_JS = r"""async ([url, origin, limit]) => {
   let r;
   try { r = await fetch(url, {credentials: 'include', redirect: 'manual'}); }
   catch (e) { return {status: 0, failed: true}; }
   if (r.type === 'opaqueredirect' || r.redirected) return {status: r.status, redirected: true};
   const type = r.headers.get('content-type') || '';
-  let html = '';
-  try { html = await ppText(r); } catch (e) { if (ppRefused(e)) throw e; }
-  if (r.status !== 200 || !/html/i.test(type)) return {status: r.status, type: type, html: html};
-  // The printed bill's own look: its stylesheets and images, fetched from
-  // the portal's own host and written into the page, so the offline,
-  // script-free drawing shows them without loading anything.
+  if (r.status !== 200 || !/html/i.test(type)) return {status: r.status, type: type};
+  const html = await ppText(r);
   const doc = new DOMParser().parseFromString(html, 'text/html');
-  let spent = 0;
-  const own = (href) => { try { const u = new URL(href, url); return u.protocol === 'https:' && u.host === host ? u.href : ''; } catch (e) { return ''; } };
-  const inlined = {css: 0, img: 0};
+  // What the page says, and whether it asks for a password, read before
+  // anything is written into it, so a stylesheet's words never count.
+  const said = (doc.body ? doc.body.textContent : '').replace(/\s+/g, ' ').trim().slice(0, 20000);
+  const password = !!doc.querySelector('input[type="password" i]');
+  // The printed bill's own look: its stylesheets and images, fetched from
+  // the portal's own origin (scheme, host and port) and written into the page, so the offline,
+  // script-free drawing shows them without loading anything. Everything
+  // written counts against one budget, the page itself first, each
+  // stylesheet as written and each image as its data address. Each answer
+  // is read through ppRead, and one that does not fit what is left is
+  // left out and named.
+  const size = (t) => new TextEncoder().encode(t).length;
+  let spent = size(html);
+  const left = () => limit - spent;
+  const dropped = [], inlined = {css: 0, img: 0};
+  const own = (href) => { try { const u = new URL(href, url); return u.origin === origin ? u.href : ''; } catch (e) { return ''; } };
+  const take = async (at, kind) => {
+    if (left() <= 0) return {why: 'over the budget'};
+    let c;
+    try { c = await fetch(at, {credentials: 'include', redirect: 'manual'}); }
+    catch (e) { return {why: 'not fetched'}; }
+    const got = c.headers.get('content-type') || '';
+    if (c.type === 'opaqueredirect' || c.status !== 200 || !kind.test(got)) {
+      try { if (c.body) await c.body.cancel(); } catch (e) {}
+      return {why: 'answered ' + c.status};
+    }
+    if (Number(c.headers.get('content-length')) > left()) {
+      try { if (c.body) await c.body.cancel(); } catch (e) {}
+      return {why: 'over the budget'};
+    }
+    try { return {buf: await ppRead(c), type: got}; }
+    catch (e) { if (ppRefused(e)) return {why: 'over the budget'}; return {why: 'not read'}; }
+  };
   for (const link of [...doc.querySelectorAll('link[rel~="stylesheet"][href]')]) {
     const at = own(link.getAttribute('href'));
     if (!at) continue;
-    try {
-      const c = await fetch(at, {credentials: 'include', redirect: 'manual'});
-      if (c.status !== 200 || !/css/i.test(c.headers.get('content-type') || '')) continue;
-      const text = await c.text();
-      spent += text.length;
-      if (spent > limit) break;
-      const style = doc.createElement('style');
-      style.textContent = text;
-      link.replaceWith(style);
-      inlined.css++;
-    } catch (e) {}
+    const got = await take(at, /css/i);
+    // An @import would reach past what was checked, and a "<" could close
+    // the style element and draw markup into the bill, so neither stays.
+    const css = got.buf ? new TextDecoder().decode(got.buf).replace(/@import[^;]*;?/gi, '').replace(/</g, '\\3c ') : '';
+    if (!got.buf || size(css) > left()) { dropped.push({kind: 'stylesheet', why: got.why || 'over the budget'}); continue; }
+    spent += size(css);
+    const style = doc.createElement('style');
+    style.textContent = css;
+    link.replaceWith(style);
+    inlined.css++;
   }
   for (const img of [...doc.querySelectorAll('img[src]')]) {
     const at = own(img.getAttribute('src'));
     if (!at) continue;
-    try {
-      const c = await fetch(at, {credentials: 'include', redirect: 'manual'});
-      const kind = c.headers.get('content-type') || '';
-      if (c.status !== 200 || !/^image\/(png|jpe?g|gif|webp)/i.test(kind)) continue;
-      const blob = await c.blob();
-      spent += blob.size;
-      if (spent > limit) break;
-      img.setAttribute('src', await new Promise((ok, no) => { const f = new FileReader(); f.onload = () => ok(f.result); f.onerror = no; f.readAsDataURL(blob); }));
-      inlined.img++;
-    } catch (e) {}
+    const got = await take(at, /^image\/(png|jpe?g|gif|webp)/i);
+    const head = got.buf ? 'data:' + got.type.split(';')[0].trim() + ';base64,' : '';
+    if (!got.buf || head.length + 4 * Math.ceil(got.buf.length / 3) > left()) {
+      dropped.push({kind: 'image', why: got.why || 'over the budget'});
+      continue;
+    }
+    let s = '';
+    for (let i = 0; i < got.buf.length; i += 0x8000) {
+      s += String.fromCharCode.apply(null, got.buf.subarray(i, i + 0x8000));
+    }
+    const data = head + btoa(s);
+    spent += data.length;
+    img.setAttribute('src', data);
+    inlined.img++;
   }
-  return {status: r.status, type: type, html: '<!doctype html>' + doc.documentElement.outerHTML, inlined: inlined};
+  return {status: r.status, type: type, html: '<!doctype html>' + doc.documentElement.outerHTML,
+          said: said, password: password, inlined: inlined, dropped: dropped};
 }"""
 
 
-def is_printed_bill(html: str) -> bool:
-    """Whether a print page is a bill: every one of PRINT_MARKERS is on it,
-    and no password field."""
-    text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html or ""))
-    return all(m in text for m in PRINT_MARKERS) and not re.search(r"type=['\"]?password", html or "", re.I)
+def is_printed_bill(said: str) -> bool:
+    """Whether a print page's own text, read before anything was written
+    into it, is a bill: every one of PRINT_MARKERS is in it."""
+    text = re.sub(r"\s+", " ", said or "")
+    return all(m in text for m in PRINT_MARKERS)
 
 
-def _fetch(page, number: str, out_path: Path, trace: Optional[list]) -> bool:
+def billing_date(said: str) -> Optional[str]:
+    """The Billing Date a print page's text gives, as YYYY-MM-DD, or None."""
+    m = _BILLING_DATE_RE.search(re.sub(r"\s+", " ", said or ""))
+    if not m:
+        return None
+    try:
+        return _date(int(m.group(3)), int(m.group(1)), int(m.group(2))).isoformat()
+    except ValueError:
+        return None
+
+
+def _fetch(page, number: str, iso_date: str, out_path: Path, trace: Optional[list]) -> bool:
     """Fetch the bill's print page from inside the signed-in page, with its
     own stylesheets and images from the portal host written into it, and
     draw it as a PDF with every script, frame and form taken out, offline
-    (receipt_pdf.print_html_inert_to_pdf). A redirect or a refusal is the
-    portal saying the session has ended; a page that is not a printed bill
-    is refused without a file."""
+    (receipt_pdf.print_html_inert_to_pdf). A redirect, a refusal or a page
+    asking for a password is the portal saying the session has ended. A
+    page that is not a printed bill, or is one of another Billing Date than
+    the Activity row's, is refused without a file. A stylesheet or image
+    left out is noted in the trace."""
     from paperpull_core import receipt_pdf
     url = print_url(number)
     if not url:
         return False
     try:
-        got = intake.evaluate(page, _PRINT_JS, [url, PORTAL_HOST, MAX_PAGE_BYTES], limit=MAX_PAGE_BYTES) or {}
+        got = intake.evaluate(page, _PRINT_JS, [url, BASE, MAX_PAGE_BYTES], limit=MAX_PAGE_BYTES) or {}
     except intake.TooLarge:
         return False
     except Exception as e:
@@ -601,19 +700,31 @@ def _fetch(page, number: str, out_path: Path, trace: Optional[list]) -> bool:
         if trace is not None:
             trace.append({"note": "fetch failed", "error": type(e).__name__})
         return False
+    dropped = [d for d in got.get("dropped") or [] if isinstance(d, dict)]
     if trace is not None:
         trace.append({"note": "fetched", "host": PORTAL_HOST, "status": got.get("status"),
-                      "type": str(got.get("type") or "")[:30]})
+                      "type": str(got.get("type") or "")[:30], "inlined": got.get("inlined")})
+        for d in dropped[:20]:
+            trace.append({"note": "left out", "kind": str(d.get("kind"))[:12], "why": str(d.get("why"))[:30]})
     if got.get("redirected") or got.get("status") in (401, 403):
         raise SessionExpired("the payment portal's session has ended")
     html = got.get("html") or ""
-    if got.get("status") != 200 or "html" not in str(got.get("type") or ""):
+    if got.get("status") != 200 or "html" not in str(got.get("type") or "").lower():
         return False
-    if not is_printed_bill(html):
-        if re.search(r"type=['\"]?password", html, re.I):
-            raise SessionExpired("the payment portal answered a bill with its sign-in page")
+    if got.get("password"):
+        raise SessionExpired("the payment portal answered a bill with its sign-in page")
+    said = str(got.get("said") or "")
+    if not is_printed_bill(said):
         log.info("the print page did not read as a bill")
         return False
+    if billing_date(said) != iso_date:
+        log.info("the print page is of another Billing Date than its Activity row")
+        if trace is not None:
+            trace.append({"note": "another billing date"})
+        return False
+    if dropped:
+        log.warning("%d stylesheet(s) or image(s) of the bill dated %s were left out of its PDF",
+                    len(dropped), iso_date)
     try:
         receipt_pdf.print_html_inert_to_pdf(page, html, out_path, base=f"{BASE}/")
     except Exception as e:
@@ -637,8 +748,7 @@ def download_bill(page, dl_dir, iso_date: str, out_path, title: str = "",
             trace.append({"note": "no recorded bill"})
         return False
     try:
-        seen = _open(page)
-        found = [d for d in bills_of(seen.get("heads"), seen.get("rows"))
+        found = [d for d in _bills(_open(page))
                  if d.document_id == number and d.date_text == (iso_date or "")]
     except ListStopped as stop:
         log.info("the bill list stopped while looking for the bill dated %s: %s", iso_date, stop)
@@ -648,7 +758,7 @@ def download_bill(page, dl_dir, iso_date: str, out_path, title: str = "",
         if trace is not None:
             trace.append({"note": "no single row matches the record", "matches": len(found)})
         return False
-    return _fetch(page, number, out_path, trace)
+    return _fetch(page, number, iso_date, out_path, trace)
 
 
 # ---------------------------------------------------------------------------

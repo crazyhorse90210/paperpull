@@ -18,8 +18,10 @@ import tualatin_docs as docs  # noqa: E402
 
 FAKE_ACCOUNT = "987654-321"
 HEADS = ["Transaction Date", "Transaction Type", "Description", "Amount", "Balance"]
-PRINTED = ("<html><body><h2>Bill Details</h2><p>Billing Date</p><p>Due Date</p>"
+PRINTED = ("<html><body><h2>Bill Details</h2><p>Billing Date</p><p>8/31/2026</p><p>Due Date</p>"
            "<p>Total Amount Due</p><script>alert(1)</script></body></html>")
+# What the print script reads off that page before anything is written in.
+SAID = "Bill Details Billing Date 8/31/2026 Due Date Total Amount Due"
 
 
 def billing(day, number):
@@ -44,8 +46,13 @@ class Locator:
 
 class Page:
     def __init__(self, rows=ROWS, settled=None, table=True, printed=PRINTED, print_status=200,
-                 print_type="text/html; charset=utf-8"):
+                 print_type="text/html; charset=utf-8", said=SAID, password=False, dropped=(),
+                 extra=None):
         self.rows, self.table = rows, table
+        self.said, self.password, self.dropped = said, password, list(dropped)
+        # More of what the Activity script returns: a pager, a count, a
+        # date filter, a choice of accounts.
+        self.extra = extra or {}
         self.settled = settled or site.DOCUMENTS_URL
         self.url = "about:blank"
         self.printed, self.print_status, self.print_type = printed, print_status, print_type
@@ -54,7 +61,8 @@ class Page:
     def goto(self, url, **k):
         self.url = self.settled
 
-    def wait_for_selector(self, *a, **k):
+    def wait_for_function(self, js, **k):
+        assert js == site._TABLE_DRAWN_JS
         if not self.table:
             raise TimeoutError("no table")
 
@@ -63,9 +71,12 @@ class Page:
 
     def evaluate(self, js, arg=None):
         if arg is None:
-            return {"table": self.table, "heads": HEADS, "rows": self.rows, "account": [FAKE_ACCOUNT]}
+            return dict({"table": self.table, "heads": HEADS, "rows": self.rows, "account": [FAKE_ACCOUNT]},
+                        **self.extra)
         self.asked.append(arg[0])
-        return {"status": self.print_status, "type": self.print_type, "html": self.printed}
+        return {"status": self.print_status, "type": self.print_type, "html": self.printed,
+                "said": self.said, "password": self.password, "dropped": self.dropped,
+                "inlined": {"css": 1, "img": 0}}
 
 
 def drawn(page, html, out_path, base=None):
@@ -119,6 +130,13 @@ class Rows(unittest.TestCase):
                 site.bills_of(HEADS, ROWS + [broken])
             self.assertEqual(len(stop.exception.docs), 3, broken)
 
+    def test_a_row_of_a_type_it_does_not_know_stops_the_list_and_is_named(self):
+        for kind, named in (("Adjustment", "'Adjustment'"), ("Final Bill", "'Final Bill'"), ("$9 <b>", "")):
+            with self.assertRaises(site.ListStopped) as stop:
+                site.bills_of(HEADS, ROWS + [{"cells": ["06/30/2026", kind, "", "$1", "$1"], "bills": []}])
+            self.assertEqual(len(stop.exception.docs), 3, kind)
+            self.assertIn("a type%s this app" % (" " + named if named else ""), str(stop.exception))
+
     def test_a_header_without_its_columns_stops(self):
         for heads in (["Date", "Type"], ["Transaction Date", "Transaction Date", "Transaction Type"], []):
             with self.assertRaises(site.ListStopped):
@@ -138,6 +156,23 @@ class ListReady(unittest.TestCase):
                      Page(settled="https://tualatin.merchanttransact.com/secure/MyBill")):
             with self.assertRaises(site.SessionExpired):
                 site.collect_download_docs(page)
+
+    def test_anything_saying_activity_is_not_whole_stops(self):
+        for extra in ({"pager": True}, {"dated": True}, {"accounts": 2}, {"count": 6}, {"count": 4}):
+            with self.assertRaises(site.ListStopped, msg=extra):
+                site.collect_download_docs(Page(extra=extra))
+        whole = {"pager": False, "dated": False, "accounts": 1, "count": 5}
+        self.assertEqual(len(site.collect_download_docs(Page(extra=whole))), 3)
+
+    def test_an_activity_with_no_bills_stops(self):
+        for rows in ([], [payment("10/05/2026")]):
+            with self.assertRaises(site.ListStopped):
+                site.collect_download_docs(Page(rows=rows))
+
+    def test_what_diagnose_says_of_the_table(self):
+        facts = site.table_facts(Page(extra={"dated": True, "accounts": 3}))
+        self.assertEqual(facts, {"heads": HEADS, "rows": 5, "pager": False, "count": None,
+                                 "date_filter": True, "account_choices": 3})
 
     def test_a_table_that_never_draws_stops(self):
         with self.assertRaises(site.ListStopped):
@@ -176,17 +211,37 @@ class Download(unittest.TestCase):
             draw.assert_not_called()
 
     def test_a_page_that_is_not_a_bill_is_not_drawn(self):
-        for page in (Page(printed="<html><body>Something else</body></html>"), Page(print_status=500),
-                     Page(print_type="application/json")):
+        for page in (Page(said="Something else"), Page(print_status=500),
+                     Page(print_type="application/json"), Page(said=SAID.replace("8/31", "7/31")),
+                     Page(said=SAID.replace("Billing Date 8/31/2026", "Billing Date"))):
             ok, draw = self.save(page)
             self.assertFalse(ok)
             draw.assert_not_called()
             self.assertFalse(self.out.exists())
 
     def test_refused_and_sign_in_answers_raise(self):
-        for page in (Page(print_status=401), Page(printed="<form><input type='password'></form>")):
+        for page in (Page(print_status=401), Page(print_status=403), Page(password=True)):
             with self.assertRaises(site.SessionExpired):
                 self.save(page)
+
+    def test_a_password_rule_in_a_stylesheet_is_not_a_sign_in_page(self):
+        css = "<style>input[type=\"password\"] { border: 1px }</style>"
+        ok, draw = self.save(Page(printed=PRINTED.replace("<body>", "<body>" + css)))
+        self.assertTrue(ok)
+        draw.assert_called_once()
+
+    def test_the_type_is_read_whatever_its_case(self):
+        ok, _ = self.save(Page(print_type="TEXT/HTML; charset=utf-8"))
+        self.assertTrue(ok)
+
+    def test_what_was_left_out_of_the_page_is_in_the_trace(self):
+        trace = []
+        with mock.patch("paperpull_core.receipt_pdf.print_html_inert_to_pdf", side_effect=drawn):
+            ok = site.download_bill(Page(dropped=[{"kind": "stylesheet", "why": "over the budget"}]), None,
+                                    "2026-08-31", self.out, trace=trace, href="/secure/MyBill/10000002",
+                                    document_id="10000002")
+        self.assertTrue(ok)
+        self.assertIn({"note": "left out", "kind": "stylesheet", "why": "over the budget"}, trace)
 
 
 def make_app(tmp, *args):

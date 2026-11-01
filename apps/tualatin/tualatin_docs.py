@@ -1,8 +1,8 @@
 """Tualatin Water bill downloader (local, supervised).
 
-City of Tualatin Utility Billing keeps its customers' bills on tualatin.merchanttransact.com,
-tualatin.merchanttransact.com. This downloads the bill PDFs Billing History lists,
-about two years of them. The orchestrator below is the same one every
+Tualatin Water keeps its customers' bills on CivicPay Online,
+tualatin.merchanttransact.com. This saves each bill Activity lists, drawn
+from its print page as a PDF, about two years of them. The orchestrator below is the same one every
 other statement app runs on. Everything about the site itself is in
 tualatin_site.py.
 
@@ -20,7 +20,7 @@ Usage:
 Filters: --year YYYY  --start-date YYYY-MM-DD  --end-date YYYY-MM-DD
          --max-docs N  --type Statement
 
-READ-ONLY: this tool only reads Billing History and saves the bill PDFs
+READ-ONLY: this tool only reads Activity and saves the bill PDFs
 Tualatin Water already generated. It never pays a bill, sets up autopay or a payment
 arrangement, enrolls in anything, starts, stops or transfers service, or
 changes any account setting. Everything stays on this machine, and nothing
@@ -131,7 +131,7 @@ class Document:
         self.date = date
         self.period = period
         self.date_text = date_text  # the row's raw date string, for re-matching
-        # The bill's invoice id, what it is fetched by and known by.
+        # The bill's number, what it is fetched by and known by.
         self.document_id = document_id
         self.source_url = kw.get("source_url", "")  # page where the doc's download link lives
         # Sticky "was successfully downloaded at least once" marker. Once set,
@@ -151,7 +151,7 @@ class Document:
 
     @property
     def key(self) -> str:
-        """Stable identity. A bill's invoice id, which no other bill
+        """Stable identity. A bill's number, which no other bill
         carries. A record without one falls back to category, date and
         title."""
         if self.document_id:
@@ -180,11 +180,11 @@ def migrate_legacy_keys(records: dict) -> int:
 
 def told_apart_by(record: dict) -> str:
     """What a bill's file adds to its name when another file already has
-    that name, the same on every run: the end of its invoice id, never
+    that name, the same on every run: the end of its bill number, never
     " (2)" (core/tests/test_every_app_renames_each_file_for_its_own_record).
-    Two bills of one statement date stop the list (tualatin_site.bills_of), so
-    this is reached only when a file of that name is already in the folder.
-    The download and Rename both ask this, so they agree."""
+    Two bills of one date are two records, each with its own number, so the
+    second to be saved is told apart from the first by it. The download and
+    Rename both ask this, so they agree."""
     doc_id = str((record or {}).get("document_id") or "").strip()
     return doc_id[-6:] if doc_id else ""
 
@@ -219,7 +219,7 @@ class App:
                                  DOCUMENT_INDEX_COLUMNS, self.paths.backups)
         self.rules = doc_types.load_rules()
         # The owner's name first. The site adds what names the account, its
-        # number and address, once Billing History shows them.
+        # number, once Activity shows it.
         site.set_private_words([self.config.get("owner", "")])
 
         self._pw = None
@@ -381,7 +381,7 @@ class App:
     def cmd_login(self):
         print("Checking the connection to your signed-in tualatin.merchanttransact.com browser...\n")
         page = self.page()
-        # What only a signed-in page shows, Billing History's own list.
+        # What only a signed-in page shows, Activity's own table.
         listed = site.bill_list_opens(page)
         challenge = site.detect_security_challenge(page)
         if challenge:
@@ -390,13 +390,13 @@ class App:
             print("Connected, but tualatin.merchanttransact.com shows its sign-in page.")
             print("Sign in in the open browser window (keep it OPEN), then re-run --login.")
         elif listed:
-            print("Success. Connected, and Billing History lists your bills.")
+            print("Success. Connected, and Activity lists your bills.")
             print("Keep that browser window OPEN, then run the diagnostics or pilot.")
         else:
-            print("Connected, but Billing History did not finish loading, so this cannot")
-            print("say whether you are signed in. Look at the browser window and answer")
-            print("anything tualatin.merchanttransact.com asks there yourself. If it shows your account, open")
-            print("Billing, then Billing History in it, then run --diagnose.")
+            print("Connected, but Activity could not be read, so this cannot say whether")
+            print("you are signed in. Look at the browser window and answer anything")
+            print("CivicPay Online asks there yourself. If it shows your account, open")
+            print("Activity in it, then run --diagnose.")
         self.close()
 
     def _in_scope(self, doc: Document) -> bool:
@@ -416,7 +416,7 @@ class App:
         return True
 
     def _record_rawdoc(self, r, source_url: str) -> int:
-        """Record one bill (a RawDoc) read from Billing History.
+        """Record one bill (a RawDoc) read from Activity.
         Returns 1 if new."""
         title = re.sub(r"\s+", " ", (r.title or "")).strip()
         if not title:
@@ -459,12 +459,12 @@ class App:
         listing.started(self)
         n_new = 0
         # The tab is taken the way each bill takes it. With no tab of the
-        # person's on tualatin.merchanttransact.com, Billing History is opened in a tab
-        # of this run's own before anything asks about the session, since
-        # that tab starts blank, off the site, and the session check stops
-        # on a tab off the site. A tab of another site is never used.
+        # person's on tualatin.merchanttransact.com, Activity is opened in a
+        # tab of this run's own before anything asks about the session,
+        # since that tab starts blank, off the site, and the session check
+        # stops on a tab off the site. A tab of another site is never used.
         page = self._on_its_site()
-        # Billing History is then opened and read in one go by the site
+        # Activity is then opened and read in one go by the site
         # layer, so a sign-out anywhere on the way reaches the boundary
         # below and stops the run, rather than a prompt to sign in again.
         self.check_session(page)
@@ -549,17 +549,16 @@ class App:
     # -- processing --------------------------------------------------------
 
     def _on_its_site(self):
-        """The tab Discover and the next bill are taken in, on Activity on
-        Center and never a tab of another site. tualatin.merchanttransact.com keeps its
-        session in a cookie a new tab shares, so with no tab of the person's
-        on the site Billing History is opened in a tab of this run's own
+        """The tab Discover and the next bill are taken in, on CivicPay
+        Online and never a tab of another site. CivicPay Online keeps its
+        session in a cookie a new tab shares, so with no tab of the
+        person's on the site Activity is opened in a tab of this run's own
         (tabs.on_its_site)."""
         return tabs.on_its_site(self, site.is_safe_url, "tualatin.merchanttransact.com",
                                 self._open_documents)
 
     def _open_documents(self, page):
-        """Billing History, opened by its address the way discovery opens
-        it."""
+        """Activity, opened by its address the way discovery opens it."""
         if not site.goto_documents(page):
             self.check_session(page)
             site.goto_documents(page)
@@ -611,19 +610,19 @@ class App:
         ])
 
     def download_one(self, page, doc: Document, filename: str):
-        """Save one bill. The site layer opens Billing History again and
-        fetches the bill by its invoice id, only when exactly one row there
-        carries the recorded id and statement date. Nothing is pressed."""
+        """Save one bill. The site layer opens Activity again and fetches
+        the bill by its number, only when exactly one Billing row there
+        carries the recorded number and date. Nothing is pressed."""
         self.check_session(page)
         folder = self.paths.folder_for(doc.category)
         # Only a name already taken in the folder gets the end of the
-        # invoice id (told_apart_by).
+        # bill number (told_apart_by).
         out_path = unique_path(folder, filename, self.config["max_path_length"],
                                distinguisher=told_apart_by(doc.to_dict()))
         if out_path.name != filename:
             self.stats["duplicate_filenames"] += 1
 
-        # The site layer opens Billing History itself, finds this bill and
+        # The site layer opens Activity itself, finds this bill and
         # fetches it.
         trace: list = []
         saved = site.download_bill(page, None, doc.date, out_path,
@@ -936,7 +935,7 @@ class App:
         words = words_for('Tualatin Water', site)
         page = self.page()
         info = {"timestamp": now_iso(),
-                "note": Fixed("A survey of the Tualatin Water Billing History page. It is what a "
+                "note": Fixed("A survey of the Tualatin Water Activity page. It is what a "
                               "repair of the site layer is checked against.")}
         stopped = None
         try:
@@ -958,20 +957,25 @@ class App:
             if found:
                 site.expand_all(page)
                 site.scroll_full_page(page)
-                # Where a bill's date is read from, so a list that stops
-                # for want of its Statement Date column can be repaired.
-                info["bill_table_header"] = site.table_header(page)
+                # The table's header and whatever would say it is not
+                # every transaction, so a list that stops can be repaired.
+                info["activity_table"] = site.table_facts(page)
             info["row_counts"] = {}
             for name, sel in [("doc_row", site.FALLBACK["doc_row"]),
                               ("table rows", "table tbody tr"),
-                              ("bill rows", site.BILL_ROW),
-                              ("account options", "select#accountList option")]:
+                              ("bill rows", site.BILL_ROW)]:
                 try:
                     info["row_counts"][name] = page.locator(sel).count()
                 except Exception as e:
                     info["row_counts"][name] = f"ERR {e}"
-            found_docs = site.collect_download_docs(page) if found else []
-            info["documents_recognized"] = [{"date": b.date_text, "kind": b.kind, "has_invoice_id": bool(b.document_id)}
+            found_docs = []
+            if found:
+                try:
+                    found_docs = site.collect_download_docs(page)
+                except (site.ListStopped, site.SessionExpired) as e:
+                    info["list_stopped"] = str(e)[:200]
+                    found_docs = getattr(e, "docs", [])
+            info["documents_recognized"] = [{"date": b.date_text, "kind": b.kind, "has_bill_number": bool(b.document_id)}
                                             for b in found_docs[:40]]
             docs = site.collect_documents(page)
             info["rows_collected"] = len(docs)
@@ -1075,7 +1079,7 @@ def build_parser() -> argparse.ArgumentParser:
             ("resume", "continue an interrupted run"),
             ("verify", "re-validate every saved PDF"),
             ("rename", "rename downloaded files to this app's current naming"),
-            ("diagnose", "dump the Billing History page structure (no downloads)"),
+            ("diagnose", "dump the Activity page structure (no downloads)"),
             ("record", "record your own path to a document, so this app can be repaired (downloads nothing)"),
             ]:
         ap.add_argument(f"--{name}", action="store_true", help=help_text)
