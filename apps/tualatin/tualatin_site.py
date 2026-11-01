@@ -701,9 +701,10 @@ def _fetch(page, number: str, iso_date: str, out_path: Path, trace: Optional[lis
             trace.append({"note": "fetch failed", "error": type(e).__name__})
         return False
     dropped = [d for d in got.get("dropped") or [] if isinstance(d, dict)]
+    written = got.get("inlined")
     if trace is not None:
         trace.append({"note": "fetched", "host": PORTAL_HOST, "status": got.get("status"),
-                      "type": str(got.get("type") or "")[:30], "inlined": got.get("inlined")})
+                      "type": str(got.get("type") or "")[:30], "written": written})
         for d in dropped[:20]:
             trace.append({"note": "left out", "kind": str(d.get("kind"))[:12], "why": str(d.get("why"))[:30]})
     if got.get("redirected") or got.get("status") in (401, 403):
