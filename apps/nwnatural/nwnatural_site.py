@@ -17,7 +17,9 @@ SEEN SIGNED IN, 2026-10-29 (shapes only, no values kept):
     dateFrom.day=&dateFrom.month=&dateFrom.year=, draws one table headed
     Account | Due Amount | Due Date | Action, a row per bill with a "View"
     link. Asked with an early dateFrom it lists the whole history on one
-    page (84 bills, 2019 to 2026), with padding rows of empty cells.
+    page (84 bills, 2019 to 2026), with padding rows of empty cells. No
+    pager or count was seen. The Account column is there because one
+    Paymentus sign-in can hold more than one account; only one was seen.
   * A bill's View link, /cp/view-external-bill.action?CSRF_TOKEN=...&
     accountId=&accthid=&accountNumber=&accountNumberHash=&docRef=&
     hashedDocRef=&target=, answers a plain GET with the bill itself:
@@ -25,6 +27,9 @@ SEEN SIGNED IN, 2026-10-29 (shapes only, no values kept):
   * So a run reads the Bill History link off the open portal page, fetches
     it from inside that page with an early dateFrom, and fetches each bill's
     View address the same way. Nothing is clicked and the tab is not moved.
+    The list is read once a run and kept in memory, View addresses and all,
+    and read again only when a bill is not in it or is not answered with
+    a PDF.
   * The portal loads DataDome bot protection, which passed the account
     holder's own Chrome. The page warns of a session timeout.
 
@@ -44,7 +49,6 @@ SAFETY (a payment portal that can pay, schedule and enroll):
 from __future__ import annotations
 
 import logging
-import json
 import re
 import sys
 from dataclasses import dataclass
@@ -216,26 +220,9 @@ def parse_period_date(text: str) -> Tuple[Optional[str], str]:
     return None, ""
 
 
-# A bill row's statement date, exactly as the table writes it: "Sep 12, 2026".
-_DUE_DATE_RE = _STATEMENT_DATE_RE = re.compile(
+# A bill row's due date, exactly as the table writes it: "Sep 12, 2026".
+_DUE_DATE_RE = re.compile(
     r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+([0-9]{1,2}),\s+([0-9]{4})")
-# The words that head the column that date is read from. A header holding
-# both, as "Statement Date" or "Statement Date *" does, and "Due Date" does
-# not, since the live header has only been named, never seen whole.
-STATEMENT_HEAD_WORDS = frozenset({"statement", "date"})
-
-
-def statement_date(text) -> Optional[str]:
-    """A bill row's statement date as YYYY-MM-DD, or None. The whole cell
-    must be the date and the day must exist; nothing is found inside other
-    text."""
-    m = _STATEMENT_DATE_RE.fullmatch(re.sub(r"\s+", " ", str(text or "")).strip())
-    if not m:
-        return None
-    try:
-        return _date(int(m.group(3)), _MONTHS[m.group(1).lower()], int(m.group(2))).isoformat()
-    except ValueError:
-        return None
 
 
 # ---------------------------------------------------------------------------
@@ -243,9 +230,15 @@ def statement_date(text) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 class SessionExpired(Exception):
-    """nwnatural.com answered as a signed-out session: its sign-in page,
-    a redirect where a bill was asked for, a 401, or an HTML or JSON body
-    where a PDF was expected. The run stops for the account holder."""
+    """The payment portal answered as a signed-out session: its sign-in
+    page, a redirect, a 401, or a 403 that is not its bot protection's. The
+    run stops for the account holder."""
+
+
+class Challenged(Exception):
+    """The portal's bot protection (DataDome) answered in place of the
+    portal. The account holder answers it in the browser, so the run stops
+    once and says so rather than calling the session signed out."""
 
 
 def looks_signed_out(page) -> bool:
@@ -303,12 +296,6 @@ def is_safe_control(name: str) -> bool:
     return any(rx.match(name) for rx in SAFE_DOC_CONTROL_RES)
 
 
-# ---------------------------------------------------------------------------
-# Hosts. Exact, parsed, no subdomain wildcard, and a bill only from the one
-# PDF address.
-# ---------------------------------------------------------------------------
-# The site and the account API its signed-in pages fetch from (seen
-# 2026-10-29). Exact hosts only; analytics and cookie hosts are not allowed.
 # ---------------------------------------------------------------------------
 # Hosts. Exact, parsed, no subdomain wildcard.
 # ---------------------------------------------------------------------------
@@ -379,6 +366,21 @@ class ListStopped(Exception):
         self.docs = list(docs or [])
 
 
+class SeveralAccounts(ListStopped):
+    """Bill History lists the bills of more than one account. A bill is
+    known by its due date alone, so two accounts' bills could not be told
+    apart, and nothing is listed."""
+
+    def __init__(self, count: int):
+        super().__init__(f"the bill history lists the bills of {count} accounts, and this app reads one")
+        self.count = count
+
+
+def on_portal(page) -> bool:
+    """Whether the tab is on the payment portal itself, not nwnatural.com."""
+    return _on_portal(page)
+
+
 def _on_portal(page) -> bool:
     try:
         return urlsplit(page.url or "").netloc == PORTAL_HOST and is_safe_url(page.url or "")
@@ -416,6 +418,11 @@ _LIST_JS = r"""async ([url]) => {
   if (r.type === 'opaqueredirect' || r.redirected) return {status: r.status, redirected: true};
   let html = '';
   try { html = await ppText(r); } catch (e) { if (ppRefused(e)) throw e; }
+  // DataDome answers a 403 of its own, marked in its headers or its page.
+  if (r.status === 403 && (r.headers.get('x-datadome') || r.headers.get('x-dd-b')
+                           || /captcha-delivery|datadome/i.test(html))) {
+    return {status: r.status, challenge: true};
+  }
   const doc = new DOMParser().parseFromString(html, 'text/html');
   const text = (el) => (el ? el.textContent : '').replace(/\s+/g, ' ').trim();
   const password = !!doc.querySelector("input[type='password']");
@@ -433,7 +440,25 @@ _LIST_JS = r"""async ([url]) => {
       .map(a => new URL(a.getAttribute('href'), url).href);
     rows.push({cells: cells, views: views});
   }
-  return {status: r.status, table: true, heads: heads, rows: rows, password: password};
+  // A pager offering another page: a control in a pager, not disabled,
+  // reading Next, an arrow, or a page number past the first.
+  const off = (el) => el.hasAttribute('disabled') || el.getAttribute('aria-disabled') === 'true'
+    || /\bdisabled\b/.test(el.className || '') || /\bdisabled\b/.test((el.parentElement || {}).className || '');
+  let pager = false;
+  for (const box of doc.querySelectorAll('.pagination, .pager, .dataTables_paginate, [class*="paginat"], nav[aria-label*="pag" i]')) {
+    for (const el of box.querySelectorAll('a, button')) {
+      const t = text(el);
+      if (!off(el) && (/^(next|more|>|›|»|>>)$/i.test(t) || (/^[0-9]+$/.test(t) && +t > 1))) pager = true;
+    }
+  }
+  // A count the page gives of its own rows, as "Showing 1 to 84 of 84" or
+  // "Page 1 of 3".
+  const all = text(doc.body);
+  let count = null, m;
+  if ((m = all.match(/showing\s+([0-9]+)\s*(?:to|-|–)\s*([0-9]+)\s+of\s+([0-9]+)/i))) count = +m[3];
+  if ((m = all.match(/\bpage\s+([0-9]+)\s+of\s+([0-9]+)/i)) && +m[2] > 1) pager = true;
+  return {status: r.status, table: true, heads: heads, rows: rows, password: password,
+          pager: pager, count: count};
 }"""
 
 
@@ -442,6 +467,8 @@ def _ask_list(page, url: str) -> dict:
         got = intake.evaluate(page, _LIST_JS, [url], limit=MAX_LIST_BYTES) or {}
     except intake.TooLarge:
         raise ListStopped("the bill history page is larger than any history")
+    if got.get("challenge"):
+        raise Challenged("the payment portal's bot protection asked to check the browser")
     if got.get("redirected") or got.get("status") in (401, 403) or got.get("password"):
         raise SessionExpired("the payment portal's session has ended")
     if got.get("status") != 200:
@@ -463,38 +490,58 @@ def bill_day(text) -> Optional[str]:
         return None
 
 
+def _column(heads: list, name: str) -> int:
+    found = [i for i, h in enumerate(heads or []) if re.fullmatch(name, str(h or ""), re.I)]
+    if len(found) != 1:
+        raise ListStopped(f"the bill history shows no single {name.title()} column")
+    return found[0]
+
+
 def bills_of(heads: list, rows: list) -> List[RawDoc]:
     """RawDocs from the Bill History rows, one per row with a View link,
-    dated by its Due Date column. A header with no single Due Date column,
-    a row with no View link or more than one, a View address that is not a
-    bill's, a date that is not a calendar date, or two bills of one date
-    stops the list, carrying what was read before it, since a bill is found
-    again by its date. Nothing from a row but its date is said."""
+    dated by its Due Date column. The rows must all be of one account: a
+    sign-in whose history holds more raises SeveralAccounts and nothing is
+    listed, since a bill is known by its due date alone. A header with no
+    single Account or Due Date column, a row with no account, no View link
+    or more than one, a View address that is not a bill's, or a date that
+    is not a calendar date stops the list, carrying what was read before
+    it. Two bills of one date are both listed, and only that date is
+    refused when it is fetched (colliding_dates). Nothing from a row but
+    its date is said."""
+    col, acct_col = _column(heads, "due date"), _column(heads, "account")
+    accounts = {str(c[acct_col]).strip() for c in ((r or {}).get("cells") or [] for r in rows or [])
+                if acct_col < len(c) and str(c[acct_col]).strip()}
+    if len(accounts) > 1:
+        raise SeveralAccounts(len(accounts))
     docs: List[RawDoc] = []
-    found = [i for i, h in enumerate(heads or []) if re.fullmatch(r"due date", str(h or ""), re.I)]
-    if len(found) != 1:
-        raise ListStopped("the bill history shows no single Due Date column")
-    col = found[0]
-    dates = set()
     for r in rows or []:
         cells, views = (r or {}).get("cells") or [], (r or {}).get("views") or []
+        if max(col, acct_col) >= len(cells):
+            raise ListStopped("a bill's row does not line up with the header", docs)
+        if not str(cells[acct_col]).strip():
+            raise ListStopped("a bill row names no account", docs)
         if len(views) != 1:
             raise ListStopped("a bill row carries no single View link", docs)
         if not is_download_url(views[0]):
             raise ListStopped("a bill's View address is not one this can read", docs)
-        if col >= len(cells):
-            raise ListStopped("a bill's row does not line up with the header", docs)
         iso = bill_day(cells[col])
         if not iso:
             raise ListStopped("a bill's due date is not a calendar date", docs)
-        if iso in dates:
-            raise ListStopped("two bills carry one due date", docs)
-        dates.add(iso)
         title = f"NW Natural Bill {iso}"
         docs.append(RawDoc(title=title, date_text=iso, href=DOWNLOAD_PATH, text=title,
                            row_index=len(docs), kind="statement",
                            document_id=f"bill-{iso}", bill_ref=views[0]))
     return docs
+
+
+def colliding_dates(docs: List[RawDoc]) -> List[str]:
+    """The due dates more than one bill carries, a corrected bill reissued
+    under its first one's date, say. Neither bill of such a date is
+    fetched, since nothing tells the two apart."""
+    seen, twice = set(), set()
+    for d in docs:
+        (twice if d.document_id in seen else seen).add(d.document_id)
+    return sorted({d.date_text for d in docs if d.document_id in twice})
 
 
 def _keep_private(rows) -> None:
@@ -521,8 +568,24 @@ def _all_bills(page) -> List[RawDoc]:
     if not url:
         raise ListStopped("the payment portal page shows no Bill History link")
     got = _ask_list(page, url)
-    _keep_private(got.get("rows"))
-    return bills_of(got.get("heads"), got.get("rows"))
+    rows = got.get("rows") or []
+    _keep_private(rows)
+    _RUN["facts"] = {"heads": list(got.get("heads") or [])[:12], "rows": len(rows),
+                     "pager": bool(got.get("pager")), "count": got.get("count")}
+    # One page was seen holding every bill. A pager, or a count that is not
+    # the rows read, says this page is not the whole of it.
+    if got.get("pager"):
+        raise ListStopped("the bill history shows a pager, and this app reads one page")
+    count = got.get("count")
+    if isinstance(count, int) and not isinstance(count, bool) and count != len(rows):
+        raise ListStopped(f"the bill history says it holds {count} bills and {len(rows)} were read")
+    docs = bills_of(got.get("heads"), rows)
+    # An empty history has not been seen, and a refused start date or a
+    # token that lost its account would look just like one.
+    if not docs:
+        raise ListStopped("the bill history shows no bills, and an empty history has not been "
+                          "seen, so this stops rather than call it complete")
+    return docs
 
 
 def goto_documents(page) -> bool:
@@ -558,16 +621,31 @@ def expand_all(page) -> None:
     return None
 
 
-def table_header(page) -> dict:
-    """For Diagnose. The header is read from the fetched history, not here."""
-    return {"cells": [], "statement_date_column": None}
+# The list as this run last read it, View addresses and all, so each bill
+# is not a fresh read of the whole history, and what Diagnose says of the
+# table. In memory for the run only.
+_RUN: dict = {}
+
+
+def _read(page) -> List[RawDoc]:
+    _RUN.clear()
+    bills = _all_bills(page)
+    _RUN["bills"] = bills
+    return bills
+
+
+def list_facts() -> dict:
+    """For Diagnose: the header of the table last read, its row count,
+    whether it showed a pager, and the count it gave, if any."""
+    return dict(_RUN.get("facts") or {})
 
 
 def collect_download_docs(page) -> List[RawDoc]:
-    """Every bill in the bill history. Nothing is pressed and the tab is not
-    navigated. A list that cannot be read whole raises ListStopped holding
-    what was read, and a signed-out portal raises SessionExpired."""
-    return _all_bills(page)
+    """Every bill in the bill history, kept for this run's downloads.
+    Nothing is pressed and the tab is not navigated. A list that cannot be
+    read whole raises ListStopped holding what was read, a signed-out
+    portal raises SessionExpired, and its bot protection Challenged."""
+    return _read(page)
 
 
 _PDF_JS = r"""async ([url, limit]) => {
@@ -576,7 +654,17 @@ _PDF_JS = r"""async ([url, limit]) => {
   catch (e) { return {status: 0, failed: true}; }
   if (r.type === 'opaqueredirect' || r.redirected) return {status: r.status, redirected: true};
   const type = r.headers.get('content-type') || '';
-  if (r.status !== 200) return {status: r.status, type: type};
+  if (r.status !== 200) {
+    let challenge = false;
+    if (r.status === 403) {
+      challenge = !!(r.headers.get('x-datadome') || r.headers.get('x-dd-b'));
+      if (!challenge) {
+        try { challenge = /captcha-delivery|datadome/i.test(await ppText(r)); }
+        catch (e) { if (ppRefused(e)) throw e; }
+      }
+    }
+    return {status: r.status, type: type, challenge: challenge};
+  }
   const buf = await ppRead(r);
   if (buf.length > limit) return {status: r.status, type: type, too_big: true};
   let s = '';
@@ -589,8 +677,10 @@ _PDF_JS = r"""async ([url, limit]) => {
 
 def _fetch(page, bill: RawDoc, out_path: Path, trace: Optional[list]) -> bool:
     """GET the bill's View address from inside the portal tab, the way its
-    View link opens it, and keep the body only when it is a PDF. A redirect,
-    a refusal, or an HTML body is the portal saying the session has ended."""
+    View link opens it, and keep the body only when it is a PDF. Its bot
+    protection raises Challenged; a redirect, a 401 or another 403 raises
+    SessionExpired. Any other answer that is not a PDF, an HTML page among
+    them, fails this bill alone."""
     if not is_download_url(bill.bill_ref):
         return False
     try:
@@ -605,6 +695,8 @@ def _fetch(page, bill: RawDoc, out_path: Path, trace: Optional[list]) -> bool:
     ctype = str(got.get("type") or "").split(";", 1)[0].strip().lower()
     if trace is not None:
         trace.append({"note": "fetched", "host": PORTAL_HOST, "status": got.get("status"), "type": ctype[:30]})
+    if got.get("challenge"):
+        raise Challenged("the payment portal's bot protection asked to check the browser")
     if got.get("redirected") or got.get("status") in (401, 403):
         raise SessionExpired("the payment portal's session has ended")
     if got.get("status") != 200 or not got.get("b64"):
@@ -614,8 +706,6 @@ def _fetch(page, bill: RawDoc, out_path: Path, trace: Optional[list]) -> bool:
     except Exception:
         return False
     if data[:5] != b"%PDF-":
-        if data.lstrip()[:1] in (b"<", b"{", b"["):
-            raise SessionExpired("the payment portal answered a bill with a sign-in page")
         return False
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_bytes(data)
@@ -625,11 +715,14 @@ def _fetch(page, bill: RawDoc, out_path: Path, trace: Optional[list]) -> bool:
 def download_bill(page, dl_dir, iso_date: str, out_path, title: str = "",
                   trace: Optional[list] = None, href: str = "",
                   document_id: str = "") -> bool:
-    """Save the bill discovery recorded for `iso_date`. The bill history is
-    read again, since a View address holds the session's token, and the bill
-    is fetched only when exactly one bill there carries that date. `dl_dir`
-    is unused: nothing goes through the browser's downloads. Nothing is
-    pressed. SessionExpired propagates to the run."""
+    """Save the bill discovery recorded for `iso_date`. The list this run
+    read is used when there is one; it is read again when there is none,
+    and once more when the bill is not in it or is not answered with a PDF,
+    since a View address lasts only as long as the session's token. The
+    bill is fetched only when exactly one bill there carries that date.
+    `dl_dir` is unused: nothing goes through the browser's downloads.
+    Nothing is pressed. Challenged, and SessionExpired from a list just
+    read, propagate to the run."""
     out_path = Path(out_path)
     if href != DOWNLOAD_PATH or not BILL_ID_RE.fullmatch(document_id or "") \
             or document_id != f"bill-{iso_date}":
@@ -637,17 +730,31 @@ def download_bill(page, dl_dir, iso_date: str, out_path, title: str = "",
         if trace is not None:
             trace.append({"note": "no recorded bill"})
         return False
-    try:
-        found = [d for d in _all_bills(page) if d.date_text == iso_date]
-    except ListStopped as stop:
-        log.info("the bill list stopped while looking for the bill dated %s: %s", iso_date, stop)
-        return False
-    if len(found) != 1:
-        log.info("%d bills match the recorded date %s, none taken", len(found), iso_date)
-        if trace is not None:
-            trace.append({"note": "no single bill matches the record", "matches": len(found)})
-        return False
-    return _fetch(page, found[0], out_path, trace)
+    why = ""
+    for fresh in ((False, True) if _RUN.get("bills") is not None else (True,)):
+        if fresh:
+            try:
+                _read(page)
+            except ListStopped as stop:
+                log.info("the bill list stopped while looking for the bill dated %s: %s", iso_date, stop)
+                return False
+        found = [d for d in _RUN["bills"] if d.document_id == document_id]
+        if len(found) != 1:
+            why = f"{len(found)} bills carry this bill's due date"
+            continue
+        try:
+            if _fetch(page, found[0], out_path, trace):
+                return True
+        except SessionExpired:
+            # A refusal of a View address this run read earlier may be its
+            # token running out, so the list is read again first.
+            if fresh:
+                raise
+        why = "the bill was not answered with a PDF"
+    log.info("the bill dated %s was not taken: %s", iso_date, why)
+    if trace is not None:
+        trace.append({"note": "not taken", "why": why})
+    return False
 
 
 # ---------------------------------------------------------------------------

@@ -1,8 +1,8 @@
 """NW Natural bill downloader (local, supervised).
 
-NW Natural keeps its customers' bills on nwnatural.com,
-www.nwnatural.com. This downloads the bill PDFs Billing History lists,
-about two years of them. The orchestrator below is the same one every
+NW Natural keeps its customers' bills on its Paymentus payment portal,
+reached from www.nwnatural.com. This downloads the bill PDFs the portal's
+Bill History lists, about eight years of them. The orchestrator below is the same one every
 other statement app runs on. Everything about the site itself is in
 nwnatural_site.py.
 
@@ -20,7 +20,7 @@ Usage:
 Filters: --year YYYY  --start-date YYYY-MM-DD  --end-date YYYY-MM-DD
          --max-docs N  --type Statement
 
-READ-ONLY: this tool only reads Billing History and saves the bill PDFs
+READ-ONLY: this tool only reads Bill History and saves the bill PDFs
 NW Natural already generated. It never pays a bill, sets up autopay or a payment
 arrangement, enrolls in anything, starts, stops or transfers service, or
 changes any account setting. Everything stays on this machine, and nothing
@@ -131,7 +131,7 @@ class Document:
         self.date = date
         self.period = period
         self.date_text = date_text  # the row's raw date string, for re-matching
-        # The bill's invoice id, what it is fetched by and known by.
+        # The bill's due date as bill-YYYY-MM-DD, what it is known by.
         self.document_id = document_id
         self.source_url = kw.get("source_url", "")  # page where the doc's download link lives
         # Sticky "was successfully downloaded at least once" marker. Once set,
@@ -151,9 +151,8 @@ class Document:
 
     @property
     def key(self) -> str:
-        """Stable identity. A bill's invoice id, which no other bill
-        carries. A record without one falls back to category, date and
-        title."""
+        """Stable identity. A bill's id, its due date. A record without one
+        falls back to category, date and title."""
         if self.document_id:
             return f"id:{self.account}:{self.document_id}" if self.account \
                 else f"id:{self.document_id}"
@@ -180,12 +179,17 @@ def migrate_legacy_keys(records: dict) -> int:
 
 def told_apart_by(record: dict) -> str:
     """What a bill's file adds to its name when another file already has
-    that name, the same on every run: the end of its invoice id, never
-    " (2)" (core/tests/test_every_app_renames_each_file_for_its_own_record).
-    Two bills of one statement date stop the list (nwnatural_site.bills_of), so
-    this is reached only when a file of that name is already in the folder.
-    The download and Rename both ask this, so they agree."""
+    that name, the same on every run, never " (2)"
+    (core/tests/test_every_app_renames_each_file_for_its_own_record). A bill
+    is known by its due date alone, and neither bill of a date two carry is
+    fetched (nwnatural_site.colliding_dates), so a name is taken only by a
+    file this app did not save for that bill. The whole due date, as
+    20261021, is all a bill has to add. The download and Rename both ask
+    this, so they agree."""
     doc_id = str((record or {}).get("document_id") or "").strip()
+    m = re.fullmatch(r"bill-([0-9]{4})-([0-9]{2})-([0-9]{2})", doc_id)
+    if m:
+        return "".join(m.groups())
     return doc_id[-6:] if doc_id else ""
 
 
@@ -219,7 +223,7 @@ class App:
                                  DOCUMENT_INDEX_COLUMNS, self.paths.backups)
         self.rules = doc_types.load_rules()
         # The owner's name first. The site adds what names the account, its
-        # number and address, once Billing History shows them.
+        # number, once Bill History shows it.
         site.set_private_words([self.config.get("owner", "")])
 
         self._pw = None
@@ -382,7 +386,7 @@ class App:
     def cmd_login(self):
         print("Checking the connection to your signed-in nwnatural.com browser...\n")
         page = self.page()
-        # What only a signed-in page shows, Billing History's own list.
+        # What only a signed-in portal tab shows, Bill History's own list.
         listed = site.bill_list_opens(page)
         challenge = site.detect_security_challenge(page)
         if challenge:
@@ -391,13 +395,13 @@ class App:
             print("Connected, but nwnatural.com shows its sign-in page.")
             print("Sign in in the open browser window (keep it OPEN), then re-run --login.")
         elif listed:
-            print("Success. Connected, and Billing History lists your bills.")
+            print("Success. Connected, and Bill History lists your bills.")
             print("Keep that browser window OPEN, then run the diagnostics or pilot.")
         else:
-            print("Connected, but Billing History did not finish loading, so this cannot")
-            print("say whether you are signed in. Look at the browser window and answer")
-            print("anything nwnatural.com asks there yourself. If it shows your account, open")
-            print("Billing, then Billing History in it, then run --diagnose.")
+            print("Connected, but Bill History could not be read, so this cannot say whether")
+            print("you are signed in. Look at the browser window and answer anything NW Natural")
+            print("asks there yourself. Open your bills on the payment portal in that window,")
+            print("then run --diagnose.")
         self.close()
 
     def _in_scope(self, doc: Document) -> bool:
@@ -417,7 +421,7 @@ class App:
         return True
 
     def _record_rawdoc(self, r, source_url: str) -> int:
-        """Record one bill (a RawDoc) read from Billing History.
+        """Record one bill (a RawDoc) read from Bill History.
         Returns 1 if new."""
         title = re.sub(r"\s+", " ", (r.title or "")).strip()
         if not title:
@@ -459,27 +463,34 @@ class App:
         # that stopped, for Resume (paperpull_core.listing).
         listing.started(self)
         n_new = 0
-        # The tab is taken the way each bill takes it. With no tab of the
-        # person's on nwnatural.com, Billing History is opened in a tab
-        # of this run's own before anything asks about the session, since
-        # that tab starts blank, off the site, and the session check stops
-        # on a tab off the site. A tab of another site is never used.
+        # The tab is taken the way each bill takes it: the person's own tab
+        # on the payment portal, never one of this run's own or a tab of
+        # another site.
         page = self._on_its_site()
-        # Billing History is then opened and read in one go by the site
-        # layer, so a sign-out anywhere on the way reaches the boundary
-        # below and stops the run, rather than a prompt to sign in again.
+        # Bill History is then read in one go by the site layer, so a
+        # sign-out anywhere on the way reaches the boundary below and stops
+        # the run, rather than a prompt to sign in again.
         self.check_session(page)
         try:
             docs = site.collect_download_docs(page)
         except site.SessionExpired:
             self.session_ended()
+        except site.Challenged:
+            self.challenged()
+        except site.SeveralAccounts as several:
+            print(f"\n!! This sign-in's Bill History lists the bills of {several.count} accounts.")
+            print("   A bill is known here by its due date alone, so two accounts' bills could")
+            print("   not be told apart, and this app reads a sign-in with one account.")
+            print("   Nothing was listed.")
+            self.write_failure("read the documents list", "the list holds more than one account")
+            raise SystemExit(1)
         except site.ListStopped as stop:
             # What was listed is kept, and the listing stays noted as one
             # that stopped, so neither this run nor a Resume calls it whole.
             for r in stop.docs:
                 self._record_rawdoc(r, site.BILLING_URL)
             self.discovery.save()
-            print(f"\n!! The NW Natural billing history stopped partway, since {stop}.")
+            print(f"\n!! The NW Natural bill history stopped partway, since {stop}.")
             print(f"   The {len(stop.docs)} bill(s) listed before it stopped are kept,")
             print("   and this run stops rather than call the list read. Run it again.")
             self.write_failure("read the documents list", "the list stopped partway")
@@ -487,7 +498,11 @@ class App:
         for r in docs:
             n_new += self._record_rawdoc(r, site.BILLING_URL)
         self.discovery.save()
-        log.info("billing history: %d bills, %d new", len(docs), n_new)
+        log.info("bill history: %d bills, %d new", len(docs), n_new)
+        twice = site.colliding_dates(docs)
+        if twice:
+            print(f"\n!! Two bills carry the due date {', '.join(twice)}, so neither can be told apart")
+            print("   from the other. That date is left for Manual Review; every other bill is read.")
 
         # The whole list is in, and only now may a Resume that carries on
         # from it call the run finished (paperpull_core.listing).
@@ -555,8 +570,18 @@ class App:
         carry a token of the session that tab signed in with, which a tab of
         this run's own never has, so no documents page is opened by address
         and a run with that tab closed stops and says so
-        (tabs.on_its_site)."""
-        return tabs.on_its_site(self, site.is_safe_url, "nwnatural.com")
+        (tabs.on_its_site). A tab on www.nwnatural.com, where a portal
+        session that timed out lands, stops the run once too, rather than
+        failing every bill."""
+        page = tabs.on_its_site(self, site.is_safe_url, "nwnatural.com")
+        if not site.on_portal(page):
+            tabs.stop(self, [
+                "The NW Natural tab is on nwnatural.com, not its payment portal, so this run",
+                "stops here and nothing was asked of the portal. The portal session may have",
+                "timed out. Open your bills on the payment portal in the open browser window,",
+                "then run Resume to carry on from where this stopped.",
+            ])
+        return page
 
     def process(self, docs: List[Document], dry_run: bool = False):
         for i, doc in enumerate(docs, 1):
@@ -588,6 +613,8 @@ class App:
                 # bill after it would get the same answer, so the run stops
                 # here, with nothing recorded against this one.
                 self.session_ended()
+            except site.Challenged:
+                self.challenged()
             except Exception as e:
                 log.exception("Failed on %s", doc.key)
                 self._record(doc, State.FAILED, notes=str(e))
@@ -604,21 +631,30 @@ class App:
             "window, then run Resume to carry on from where this stopped.",
         ])
 
+    def challenged(self) -> None:
+        """Stop the run because the portal's bot protection answered in its
+        place. Progress is saved and nothing is recorded for review
+        (tabs.stop)."""
+        tabs.stop(self, [
+            "NW Natural's payment portal asked to check the browser, so this run stops here.",
+            "Everything saved so far is kept. Answer it yourself in the open browser",
+            "window, then run Resume to carry on from where this stopped.",
+        ])
+
     def download_one(self, page, doc: Document, filename: str):
-        """Save one bill. The site layer opens Billing History again and
-        fetches the bill by its invoice id, only when exactly one row there
-        carries the recorded id and statement date. Nothing is pressed."""
+        """Save one bill. The site layer finds the bill by its due date in
+        the list this run read, or reads it, and fetches it only when
+        exactly one bill there carries that date. Nothing is pressed."""
         self.check_session(page)
         folder = self.paths.folder_for(doc.category)
-        # Only a name already taken in the folder gets the end of the
-        # invoice id (told_apart_by).
+        # Only a name already taken in the folder gets the due date
+        # (told_apart_by).
         out_path = unique_path(folder, filename, self.config["max_path_length"],
                                distinguisher=told_apart_by(doc.to_dict()))
         if out_path.name != filename:
             self.stats["duplicate_filenames"] += 1
 
-        # The site layer opens Billing History itself, finds this bill and
-        # fetches it.
+        # The site layer finds this bill and fetches it.
         trace: list = []
         saved = site.download_bill(page, None, doc.date, out_path,
                                    title=doc.title, trace=trace, href=doc.href,
@@ -930,7 +966,7 @@ class App:
         words = words_for('NW Natural', site)
         page = self.page()
         info = {"timestamp": now_iso(),
-                "note": Fixed("A survey of the NW Natural Billing History page. It is what a "
+                "note": Fixed("A survey of the NW Natural Bill History page. It is what a "
                               "repair of the site layer is checked against.")}
         stopped = None
         try:
@@ -952,20 +988,25 @@ class App:
             if found:
                 site.expand_all(page)
                 site.scroll_full_page(page)
-                # Where a bill's date is read from, so a list that stops
-                # for want of its Statement Date column can be repaired.
-                info["bill_table_header"] = site.table_header(page)
             info["row_counts"] = {}
             for name, sel in [("doc_row", site.FALLBACK["doc_row"]),
                               ("table rows", "table tbody tr"),
-                              ("bill rows", site.BILL_ROW),
-                              ("account options", "select#accountList option")]:
+                              ("bill rows", site.BILL_ROW)]:
                 try:
                     info["row_counts"][name] = page.locator(sel).count()
                 except Exception as e:
                     info["row_counts"][name] = f"ERR {e}"
-            found_docs = site.collect_download_docs(page) if found else []
-            info["documents_recognized"] = [{"date": b.date_text, "kind": b.kind, "has_invoice_id": bool(b.document_id)}
+            found_docs = []
+            if found:
+                try:
+                    found_docs = site.collect_download_docs(page)
+                except (site.ListStopped, site.SessionExpired, site.Challenged) as e:
+                    info["list_stopped"] = str(e)[:200]
+                    found_docs = getattr(e, "docs", [])
+                # The fetched table's header, its rows, and any pager or
+                # count it showed, so a list that stops can be repaired.
+                info["bill_table"] = site.list_facts()
+            info["documents_recognized"] = [{"date": b.date_text, "kind": b.kind, "has_id": bool(b.document_id)}
                                             for b in found_docs[:40]]
             docs = site.collect_documents(page)
             info["rows_collected"] = len(docs)
@@ -1069,7 +1110,7 @@ def build_parser() -> argparse.ArgumentParser:
             ("resume", "continue an interrupted run"),
             ("verify", "re-validate every saved PDF"),
             ("rename", "rename downloaded files to this app's current naming"),
-            ("diagnose", "dump the Billing History page structure (no downloads)"),
+            ("diagnose", "dump the Bill History page structure (no downloads)"),
             ("record", "record your own path to a document, so this app can be repaired (downloads nothing)"),
             ]:
         ap.add_argument(f"--{name}", action="store_true", help=help_text)
